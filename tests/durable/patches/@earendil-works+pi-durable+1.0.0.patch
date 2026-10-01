@@ -1,0 +1,12 @@
+diff --git a/node_modules/@earendil-works/pi-durable/dist/harness/generation.js b/node_modules/@earendil-works/pi-durable/dist/harness/generation.js
+index 46fcb25..c045612 100644
+--- a/node_modules/@earendil-works/pi-durable/dist/harness/generation.js
++++ b/node_modules/@earendil-works/pi-durable/dist/harness/generation.js
+@@ -113,6 +113,7 @@ export const GenerationTask = defineTask({
+             const options = {
+                 ...streamOptions,
+                 signal: runtime.signal,
++                sessionId: String(runtime.conversationId),
+                 ...(thinkingLevel === "off" ? {} : { reasoning: thinkingLevel }),
+             };
+             const message = await streamResponse(runtime, model, messages, options, attempt, context);
