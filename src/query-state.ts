@@ -20,6 +20,12 @@ export class QueryContext {
 	activeQuery: unknown | null = null;
 	currentPiStream: AssistantMessageEventStream | null = null;
 	latestCursor = 0;
+	/** A clean-start query over a context shorter than its pi session's mirror.
+	 *  It must leave that mirror's cursor untouched when its tool results arrive. */
+	ephemeral = false;
+	sessionDiagnostics: Record<string, unknown> | null = null;
+	lastAssistantUuid: string | null = null;
+	onStreamStart: (() => void) | null = null;
 	pendingToolCalls = new Map<string, PendingToolCall>();
 	pendingResults = new Map<string, McpResult>();
 	/** tool_use ids emitted this turn. Sole purpose is routing a delivered result
