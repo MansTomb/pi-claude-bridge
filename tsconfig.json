@@ -3,6 +3,7 @@
   // around invariants TS can't see (e.g. Map lookups guarded by .has(), in-progress
   // assistant messages that are nullable at the type level but non-null at handler
   // call time). Cheap dead-code flags below give most of the real-world value.
+  "exclude": ["tests/durable"],
   "compilerOptions": {
     "target": "ES2022",
     "module": "NodeNext",

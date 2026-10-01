@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { withSessionContext } from "./lib/extension-context.mjs";
 
 /**
  * Provider registration across module instances (issue #91's foreground failure).
@@ -27,7 +28,7 @@ function activateWithMockPi(activateFn, options = {}) {
 	(activateFn ?? activate)({
 		on: (event, handler) => {
 			const list = handlers.get(event) ?? [];
-			list.push(handler);
+			list.push(withSessionContext(handler));
 			handlers.set(event, list);
 		},
 		registerProvider: (name, config) => registered.push({ name, config }),

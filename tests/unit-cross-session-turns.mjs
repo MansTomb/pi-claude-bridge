@@ -18,7 +18,7 @@
  */
 import { describe, it, beforeEach, afterEach } from "node:test";
 import assert from "node:assert/strict";
-import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { getSessionPath } from "cc-session-io";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -79,6 +79,8 @@ const call = (sessionId, messages) => streamSimple(model, { messages, tools: [] 
 const settle = () => new Promise((r) => setTimeout(r, 20));
 
 beforeEach(() => {
+	rmSync(claudeDir, { recursive: true, force: true });
+	mkdirSync(claudeDir, { recursive: true });
 	resetSharedSession();
 	calls.length = 0;
 	scripts.length = 0;

@@ -24,7 +24,7 @@ describe("syncSharedSession", () => {
 	it("takes the clean-start path when a transcript system message precedes the first user message", () => {
 		const cwd = mkdtempSync(join(tmpdir(), "sync-shared-session-"));
 		try {
-			const result = __test.syncSharedSession([
+			const result = __test.syncSharedSession(null, [
 				{ role: "system", content: "You are Claude Code.", timestamp: Date.now() },
 				{ role: "user", content: "Hello", timestamp: Date.now() },
 			], cwd);
@@ -51,7 +51,7 @@ describe("syncSharedSession", () => {
 			seeded.save();
 			__test.setSharedSession(null, { sessionId, cursor: 2, cwd });
 
-			const result = __test.syncSharedSession([
+			const result = __test.syncSharedSession(null, [
 				{ role: "user", content: "Hi", timestamp: Date.now() },
 				{ role: "assistant", content: [{ type: "text", text: "Hello." }], timestamp: Date.now() },
 				{ role: "system", content: "", toolsAdded: [{ name: "grep", description: "", parameters: {} }], timestamp: Date.now() },
@@ -88,7 +88,7 @@ describe("syncSharedSession", () => {
 			};
 			__test.setSharedSession(null, mainSession);
 
-			const result = __test.syncSharedSession([
+			const result = __test.syncSharedSession(null, [
 				{
 					role: "user",
 					content: "Summarize this conversation.",
@@ -143,7 +143,7 @@ describe("syncSharedSession", () => {
 
 			__test.setSharedSession(null, { sessionId, cursor: 0, cwd });
 			__test.setPiUI({ notify: (message) => notices.push(message) });
-			__test.syncSharedSession([
+			__test.syncSharedSession(null, [
 				{ role: "user", content: prompt, timestamp: Date.now() },
 				{ role: "assistant", content: [{ type: "text", text: "Noted." }], timestamp: Date.now() },
 				{ role: "user", content: "Now what did it say?", timestamp: Date.now() },
