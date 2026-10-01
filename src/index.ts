@@ -1908,6 +1908,9 @@ const CONTINUE_AFTER_REWRITE_PROMPT =
 	"[Your context was compacted. What precedes this is a summary plus the most recent messages, "
 	+ "ending with the tool result you were waiting for. Continue the task from there.]";
 
+const CONTINUE_AFTER_RESTART_PROMPT =
+	"[The host restarted while you were waiting for this tool result. Everything before it already happened. Continue the task from there.]";
+
 /** Drop a Claude Code query parked at a tool boundary whose conversation pi has
  *  since rewritten (/compact, tree navigation).
  *
@@ -2031,33 +2034,8 @@ function streamClaudeAgentSdk(model: Model<any>, context: Context, options?: Sim
 		return stream;
 	}
 
-	// --- Orphaned tool result (e.g. user aborted a tool call) ---
-	// The query is gone but pi still delivered the result. Nothing to do — just
-	// emit end_turn so pi waits for the next real user message. The discard
-	// branch above already siphoned off the stale-query case, which goes on to a
-	// rebuild instead — that one has somewhere to deliver the result to.
 	const lastMsg = context.messages[context.messages.length - 1];
-	if (lastMsg?.role === "toolResult" && !rewrittenUnderQuery) {
-		debug(`provider: orphaned tool result after abort, emitting end_turn`);
-		// With no query in flight anywhere, the top-level session this result
-		// belongs to is the one whose turn just ended: its cursor advances to
-		// count the result (options.sessionId is that session — pi emits the
-		// result event through the same session's streamSimple call).
-		const orphanState = sessionStateFor(options?.sessionId ?? null);
-		if (orphanState && activeQueryContexts.size === 0) orphanState.cursor = context.messages.length;
-		// No query owns this result, so there is no context to reset: resetTurnState
-		// on the top-level ctx() would replace a live parent's turnOutput mid-stream,
-		// stranding the blocks it had already emitted. A throwaway context just
-		// supplies the empty message this turn ends with.
-		const c = new QueryContext();
-		c.resetTurnState(model);
-		queueMicrotask(() => {
-			stream.push({ type: "done", reason: "stop", message: c.turnOutput });
-			markStreamComplete(stream);
-			stream.end();
-		});
-		return stream;
-	}
+	const resumingAtToolResult = lastMsg?.role === "toolResult" && !rewrittenUnderQuery;
 
 	// --- Fresh query ---
 
@@ -2136,8 +2114,8 @@ function streamClaudeAgentSdk(model: Model<any>, context: Context, options?: Sim
 	// recovery below — that one is for a shape we do not expect, and this is one
 	// we do. The rebuilt session already ends with the tool result, placed after
 	// the tool call it answers.
-	if (rewrittenUnderQuery && !promptText && !promptBlocks) {
-		promptText = CONTINUE_AFTER_REWRITE_PROMPT;
+	if ((rewrittenUnderQuery || resumingAtToolResult) && !promptText && !promptBlocks) {
+		promptText = resumingAtToolResult ? CONTINUE_AFTER_RESTART_PROMPT : CONTINUE_AFTER_REWRITE_PROMPT;
 		debug(`provider: continuing the turn after a rewritten history, ${context.messages.length} msgs rebuilt`);
 	}
 
