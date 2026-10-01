@@ -102,34 +102,16 @@ describe("PromptCaptures", () => {
 		assert.equal(captures.resolve(PARENT_KEY).contextFiles.length, 1);
 	});
 
-	it("throws rather than silently dropping instructions it cannot account for", () => {
+	it("forwards a prompt it never recorded whole, as the host's own instructions", () => {
 		const captures = new PromptCaptures();
 		captures.record(PARENT_KEY, capture({ contextFiles: [{ path: "/AGENTS.md", content: "parent rules" }] }));
 
-		assert.throws(
-			() => captures.resolveOrDerive("a prompt sharing nothing with what we recorded"),
-			/no capture for this .* system prompt/,
-		);
-		// No prompt at all is not a loss — there is nothing to forward.
+		const hostPrompt = "<instructions>\nYou are a terse tabletop game master.\n</instructions>";
+		const projected = projectPromptCapture(captures.resolveOrDerive(hostPrompt), { skillReadTool: "mcp" });
+
+		assert.equal(projected, hostPrompt);
+		assert.equal(captures.resolve(hostPrompt), undefined, "a host prompt is not retained");
 		assert.equal(captures.resolveOrDerive(undefined), undefined);
-	});
-
-	it("reports the closest known capture when a prompt matches nothing", () => {
-		const diagnostics = [];
-		const captures = new PromptCaptures(64, (d) => diagnostics.push(d));
-		captures.record("prefix-common-THE-REST", capture());
-
-		let error;
-		try {
-			captures.resolveOrDerive("prefix-common-WHO-ARE-YOU");
-		} catch (e) {
-			error = e;
-		}
-
-		assert.match(String(error?.message), /diverges at offset 14 \(22-char key\)/);
-		assert.equal(diagnostics.length, 1);
-		assert.equal(diagnostics[0].matches[0].key, "prefix-common-THE-REST");
-		assert.equal(diagnostics[0].matches[0].firstDivergent, 14);
 	});
 
 	it("recursively projects an inherited prompt without Pi's harness", () => {
@@ -268,16 +250,5 @@ describe("capture provenance", () => {
 		assert.equal(captures.resolve("key").source, "agent_start");
 		captures.record("key", capture(), "turn_start");
 		assert.equal(captures.resolve("key").source, "turn_start", "a re-record replaces the earlier source");
-	});
-
-	it("names the closest match's boundary in a throw", () => {
-		const captures = new PromptCaptures();
-		captures.record("prefix-common-THE-REST", capture(), "agent_start");
-
-		assert.throws(
-			() => captures.resolveOrDerive("prefix-common-WHO-ARE-YOU"),
-			/recorded at agent_start/,
-			"the diagnostic must say which boundary last recorded the closest known prompt",
-		);
 	});
 });

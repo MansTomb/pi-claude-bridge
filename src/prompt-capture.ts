@@ -35,29 +35,8 @@ export type PromptCapture = PromptCaptureInput & {
  * without recognizing pi prose or sub-agent markers. If pi later exposes an
  * inherited-system-prompt field, it should replace this inference.
  */
-export type PromptCaptureDiagnostic = {
-	/** The prompt that matched nothing: the full system prompt is too big to log
-	 *  inline, so a fingerprint plus the closest match's first divergent offset
-	 *  are enough to recognize the pump.
-	 *
-	 *  Closest is by shared prefix — the case that matters here is pi itself
-	 *  rebuilding the prompt outside `before_agent_start` (a changed tool list or
-	 *  fresh resource discovery), which edits near the boundary, and a prefix key
-	 *  gets us to within a handful of characters of where. */
-	systemPrompt: string;
-	matches: { key: string; firstDivergent: number; source?: string }[];
-};
-
 export class PromptCaptures {
 	private readonly captures = new Map<string, PromptCapture>();
-	/** Invoked with everything that would otherwise be lost when resolution throws,
-	 *  so the bridge can write it to its debug log. Kept off the throw path itself:
-	 *  the resolver is hot and the caller may own a faster sink than string-building.
-	 *
-	 *  Set by the bridge on the shared instance; tests that want the diagnostic can
-	 *  pass one per instance. */
-	private readonly onDiagnose: (diagnostic: PromptCaptureDiagnostic) => void;
-
 	/** Pi rebuilds prompts when tools change, so retain only recent lookup keys.
 	 *  Inheritance edges hold direct references and survive key eviction.
 	 *
@@ -67,9 +46,7 @@ export class PromptCaptures {
 	 *  own next turn would be evicted despite being in use. The bound exists only to
 	 *  cap an extension that rebuilds the prompt every turn, which would otherwise
 	 *  grow keys without limit. */
-	constructor(private readonly limit = 256, onDiagnose?: (diagnostic: PromptCaptureDiagnostic) => void) {
-		this.onDiagnose = onDiagnose ?? (() => {});
-	}
+	constructor(private readonly limit = 256) {}
 
 	record(systemPrompt: string, input: PromptCaptureInput, source?: string): void {
 		const existing = this.captures.get(systemPrompt);
@@ -130,12 +107,6 @@ export class PromptCaptures {
 	 * unchanged. That surrounding text belongs to whatever did the wrapping, and
 	 * dropping it would be exactly the silent instruction loss this exists to
 	 * prevent. The descendant is not retained — its key is not ours to own.
-	 *
-	 * Throws when a prompt can be accounted for by neither route. Returning an empty
-	 * capture instead would hand Claude Code a turn with none of the user's context
-	 * files, skills, custom prompt or append text, and say so only in a debug line —
-	 * silently discarding policy the user wrote down. A failed turn is recoverable;
-	 * a turn that quietly ignored its instructions is not.
 	 */
 	resolveOrDerive(systemPrompt?: string): PromptCapture | undefined {
 		if (!systemPrompt) return undefined;
@@ -160,22 +131,11 @@ export class PromptCaptures {
 		// of the parent's capture, so an "adopt the capture whose portable parts all
 		// appear here" heuristic (as drafted in upstream PR #76's findPortableMatch)
 		// placed above this route would match first, re-key the PARENT's capture under
-		// the child's prompt, and silently drop the child's wrapper text — exactly the
-		// instruction loss the throw exists to prevent. If such a route is ever added,
-		// it belongs below this block.
+		// the child's prompt, and silently drop the child's wrapper text. If such a
+		// route is ever added, it belongs below this block.
 		const embedded = this.findInheritedPrompts(systemPrompt, systemPrompt);
 		if (embedded.length === 0) {
-			const matches = this.closestKnown(systemPrompt);
-			this.onDiagnose({ systemPrompt, matches });
-			throw new Error(
-				`prompt-capture: no capture for this ${systemPrompt.length}-char system prompt, and it embeds none of the ${this.captures.size} known. `
-				+ `Closest known match diverges at offset ${matches[0]?.firstDivergent ?? "?"} `
-				+ `(${matches.length ? matches[0].key.length : 0}-char key${matches[0]?.source ? `, last recorded at ${matches[0].source}` : ""}). `
-				+ `Claude Code would receive none of this turn's context files, skills or custom instructions. `
-				+ `The usual cause is an extension loaded after claude-bridge that rewrites the system prompt from before_agent_start — `
-				+ `one that wraps it is fine, one that rebuilds or strips it leaves nothing to match. `
-				+ `(Also possible: pi rebuilt the prompt outside before_agent_start — a late-registered tool or fresh resource discovery.)`,
-			);
+			return { assembledPrompt: systemPrompt, custom: systemPrompt, contextFiles: [], skills: [], inherited: [] };
 		}
 
 		// `custom` is the prompt itself and the edges keep their original offsets, so
@@ -186,25 +146,6 @@ export class PromptCaptures {
 
 	get size(): number {
 		return this.captures.size;
-	}
-
-	/** Longest shared-prefix matches, best first, for the throw diagnostic. */
-	private closestKnown(systemPrompt: string): { key: string; firstDivergent: number; source?: string }[] {
-		let shared = 0;
-		const matches: { key: string; firstDivergent: number; source?: string }[] = [];
-		for (const [key, capture] of this.captures.entries()) {
-			const limit = Math.min(key.length, systemPrompt.length);
-			let i = 0;
-			while (i < limit && key.charCodeAt(i) === systemPrompt.charCodeAt(i)) i++;
-			if (i >= shared) {
-				if (i > shared) {
-					shared = i;
-					matches.length = 0;
-				}
-				matches.push({ key, firstDivergent: i, source: capture.source });
-			}
-		}
-		return matches;
 	}
 
 	private findInheritedPrompts(systemPrompt: string, custom?: string): InheritedPrompt[] {
@@ -260,12 +201,12 @@ type PromptPart = { label: string; text: string };
 const SHARED_CAPTURES_KEY = Symbol.for("claude-bridge:promptCaptures");
 
 /** Isolated agents re-evaluate this module; a process-wide instance lets the pinned
- *  stream resolve their captures (issue #64). The first instance's onDiagnose wins —
- *  later callers reuse the instance as-is. Never cleared at session_shutdown: identical
+ *  stream resolve their captures (issue #64). Later callers reuse the instance as-is.
+ *  Never cleared at session_shutdown: identical
  *  keys carry identical portable parts, so cross-session reuse is safe. */
-export function sharedPromptCaptures(onDiagnose?: (diagnostic: PromptCaptureDiagnostic) => void): PromptCaptures {
+export function sharedPromptCaptures(): PromptCaptures {
 	const globals = globalThis as Record<symbol, PromptCaptures | undefined>;
-	return (globals[SHARED_CAPTURES_KEY] ??= new PromptCaptures(256, onDiagnose));
+	return (globals[SHARED_CAPTURES_KEY] ??= new PromptCaptures(256));
 }
 
 export function projectPromptCapture(

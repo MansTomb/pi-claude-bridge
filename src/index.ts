@@ -1227,17 +1227,7 @@ function showStartupNoticeOnce(): void {
 // is keyed rather than held in a single slot. One process-wide instance, shared
 // across every extension module instance: isolated subagents re-evaluate this
 // module, and the pinned stream they all route through resolves against it.
-const promptCaptures = sharedPromptCaptures((diagnostic) => {
-	const first = diagnostic.matches[0];
-	debug(
-		`prompt-capture: no match for ${diagnostic.systemPrompt.length}-char system prompt. `
-		+ (first
-			? `closest known (${first.key.length}-char) shares its first ${first.firstDivergent} chars and diverges at offset ${first.firstDivergent}: `
-			  + JSON.stringify(diagnostic.systemPrompt.slice(first.firstDivergent - 40, first.firstDivergent + 60))
-			: "no known captures to compare against."
-		) + ` known keys=${diagnostic.matches.length}`,
-	);
-});
+const promptCaptures = sharedPromptCaptures();
 
 /** Whatever a settled session left behind, named in one greppable line.
  *
