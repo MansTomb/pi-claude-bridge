@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { withSessionContext } from "./lib/extension-context.mjs";
 
 /**
  * Gaps the agent_start capture does NOT close, pinned so the boundary is explicit.
@@ -32,7 +33,7 @@ const { default: activate, __test } = await import("../src/index.js");
 function activateWithMockPi(activateFn) {
 	const handlers = new Map();
 	(activateFn ?? activate)({
-		on: (event, handler) => handlers.set(event, handler),
+		on: (event, handler) => handlers.set(event, withSessionContext(handler)),
 		registerProvider: () => {},
 		registerTool: () => {},
 	});
@@ -74,17 +75,13 @@ describe("agent_start capture — documented gaps", () => {
 		assert.equal(freshTest.promptCaptures, __test.promptCaptures, "both instances share one capture registry");
 	});
 
-	it("does not match a child embedding a tail-stripped parent prompt (#88)", () => {
+	it("treats an unrecorded tail-stripped parent prompt as custom text", () => {
 		const handlers = activateWithMockPi();
 		handlers.get("before_agent_start")({ systemPrompt: PARENT_PROMPT, systemPromptOptions: {} });
 		handlers.get("agent_start")({}, { getSystemPrompt: () => PARENT_PROMPT });
 
 		// gotgenes/pi-subagents inheritedIdentity embeds the parent minus the per-session tail.
-		assert.throws(
-			() => __test.promptCaptures.resolveOrDerive(STRIPPED_CHILD),
-			/no capture/,
-			"the full assembled prompt is not a substring of its tail-stripped embedding",
-		);
+		assert.equal(__test.promptCaptures.resolveOrDerive(STRIPPED_CHILD).custom, STRIPPED_CHILD);
 	});
 
 	it("fails loudly when a recorded tail-stripped child has no inheritance edge (#88)", () => {
@@ -125,21 +122,17 @@ describe("agent_start capture — documented gaps", () => {
 		// prose would trip the server's third-party gate).
 	});
 
-	it("does not rescue a prompt composed outside the before_agent_start pipeline (#102 shape)", () => {
+	it("preserves a host-composed prompt outside the before_agent_start pipeline", () => {
 		const handlers = activateWithMockPi();
 		handlers.get("before_agent_start")({ systemPrompt: "pi rendered prompt", systemPromptOptions: {} });
 		handlers.get("agent_start")({}, { getSystemPrompt: () => "pi rendered prompt" });
 
 		// A host composing the prompt from its own template outside pi's pipeline —
 		// neither a rendered-options key, a handler-returned force, nor an embedding.
-		assert.throws(
-			() => __test.promptCaptures.resolveOrDerive("host-composed prompt owning the request head"),
-			/no capture/,
-			"out-of-pipeline composition is neither a recorded key nor an embedding of one",
-		);
+		assert.equal(__test.promptCaptures.resolveOrDerive("host-composed prompt owning the request head").custom, "host-composed prompt owning the request head");
 	});
 
-	it("does not see a prompt replaced between turn_start and the stream call (#91 remaining shape)", () => {
+	it("preserves an unrecorded prompt replacement after turn_start", () => {
 		const handlers = activateWithMockPi();
 		handlers.get("before_agent_start")({ systemPrompt: "turn-1 prompt", systemPromptOptions: {} });
 		handlers.get("agent_start")({}, { getSystemPrompt: () => "turn-1 prompt" });
@@ -149,10 +142,6 @@ describe("agent_start capture — documented gaps", () => {
 		// A rewrite landing after turn_start — a context-event handler replacing the
 		// system message, or a forced-prompt projection on newer pi — is seen by no
 		// recording boundary. When it neither is nor embeds a known key, it throws.
-		assert.throws(
-			() => __test.promptCaptures.resolveOrDerive("replacement head installed by a context handler"),
-			/no capture/,
-			"post-turn_start rewrites are seen by no recording boundary",
-		);
+		assert.equal(__test.promptCaptures.resolveOrDerive("replacement head installed by a context handler").custom, "replacement head installed by a context handler");
 	});
 });

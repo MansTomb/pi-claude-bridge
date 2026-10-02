@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { withSessionContext } from "./lib/extension-context.mjs";
 
 /**
  * agent_start records the fully-widened system prompt.
@@ -22,7 +23,7 @@ const { default: activate, __test } = await import("../src/index.js");
 
 function activateWithMockPi() {
 	const handlers = new Map();
-	activate({ on: (event, handler) => handlers.set(event, handler), registerProvider: () => {}, registerTool: () => {} });
+	activate({ on: (event, handler) => handlers.set(event, withSessionContext(handler)), registerProvider: () => {}, registerTool: () => {} });
 	return handlers;
 }
 
@@ -36,11 +37,7 @@ describe("agent_start widened-prompt capture", () => {
 		handlers.get("before_agent_start")({ systemPrompt: PRE_WIDEN, systemPromptOptions: {} });
 
 		// Before agent_start, only the pre-widen prompt is known; the widened one is not.
-		assert.throws(
-			() => __test.promptCaptures.resolveOrDerive(WIDENED),
-			/no capture/,
-			"the widened prompt must not resolve off the pre-widen record alone",
-		);
+		assert.equal(__test.promptCaptures.resolveOrDerive(WIDENED).custom, WIDENED);
 
 		handlers.get("agent_start")({}, { getSystemPrompt: () => WIDENED });
 		assert.ok(

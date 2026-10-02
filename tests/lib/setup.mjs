@@ -16,5 +16,6 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 const logDir = mkdtempSync(join(tmpdir(), "claude-bridge-test-log-"));
+process.env.CLAUDE_CONFIG_DIR = join(logDir, "claude");
 process.env.CLAUDE_BRIDGE_DEBUG_PATH = join(logDir, "claude-bridge.log");
 process.on("exit", () => rmSync(logDir, { recursive: true, force: true }));

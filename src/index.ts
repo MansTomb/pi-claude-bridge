@@ -339,17 +339,45 @@ function recordForkParent(piSessionId: string, sessionFile: string | undefined):
 	if (!sessionFile || forkParents.has(piSessionId)) return;
 	const parentKey = readSessionHeaderId(sessionFile);
 	if (parentKey && parentKey !== piSessionId) {
-		forkParents.set(piSessionId, parentKey);
+		registerForkParent(piSessionId, parentKey);
 		debug(`pi session ${piSessionId.slice(0, 8)} forks pi session ${parentKey.slice(0, 8)}`);
 	}
+}
+
+export function registerForkParent(childSessionId: string, parentSessionId: string): void {
+	if (!childSessionId || !parentSessionId || childSessionId === parentSessionId) {
+		throw new Error("A fork needs distinct, nonempty child and parent session ids");
+	}
+	const existing = forkParents.get(childSessionId);
+	if (existing !== undefined && existing !== parentSessionId) {
+		throw new Error(`Session ${childSessionId} already has a different fork parent`);
+	}
+	forkParents.set(childSessionId, parentSessionId);
+}
+
+export function releaseSession(sessionId: string): void {
+	if ([...activeQueryContexts].some((context) => context.piSessionId === sessionId)) {
+		throw new Error(`Session ${sessionId} is still active; abort or settle it before release`);
+	}
+	sharedSessions.delete(sessionKey(sessionId));
+	forkParents.delete(sessionId);
+	historyRewrittenBySession.delete(sessionId);
 }
 
 function awaitForkGate(base: string, started: Promise<void>): Promise<void> {
 	const existing = forkGates.get(base);
 	if (existing) {
-		return Promise.race([existing, new Promise<void>((resolve) => setTimeout(resolve, FORK_GATE_TIMEOUT_MS))]);
+		return new Promise<void>((resolve) => {
+			const finish = () => { clearTimeout(timer); resolve(); };
+			const timer = setTimeout(finish, FORK_GATE_TIMEOUT_MS);
+			void existing.then(finish, finish);
+		});
 	}
 	forkGates.set(base, started);
+	const clear = () => {
+		if (forkGates.get(base) === started) forkGates.delete(base);
+	};
+	void started.then(clear, clear);
 	return Promise.resolve();
 }
 
@@ -1090,6 +1118,9 @@ let queryImpl: typeof query = query;
 
 // @internal
 export const __test = {
+	awaitForkGate,
+	forkParents,
+	forkGates,
 	setQuery(fn: typeof query | null) {
 		queryImpl = fn ?? query;
 	},
