@@ -866,6 +866,7 @@ function recoverFromCheckpoints(
 	cwd: string,
 	customToolNameToSdk?: Map<string, string>,
 	modelId?: string,
+	persist = true,
 ): SyncResult | undefined {
 	const match = bestCheckpoint(state.checkpoints ?? [], priorMessages);
 	if (!match) return undefined;
@@ -893,7 +894,7 @@ function recoverFromCheckpoints(
 	);
 	const rebuilt: SessionState = { sessionId: targetId, cursor: priorMessages.length, cwd, piSessionId: owner, synced, checkpoints, lastResponseAt: state.lastResponseAt };
 	setSessionStateFor(piSessionId, rebuilt);
-	persistSession(piSessionId, rebuilt);
+	if (persist) persistSession(piSessionId, rebuilt);
 	debug(`Case 5 prefix-preserving rebuild: kept ${chain.length} Claude Code records of ${state.sessionId.slice(0, 8)} up to ${match.checkpoint.leaf.slice(0, 8)}, appended ${missed.length} pi message(s) → session ${targetId.slice(0, 8)}`);
 	return { sessionId: targetId, path: "rebuild", preservedRecords: chain.length };
 }
@@ -904,10 +905,11 @@ function forkFromParent(
 	cwd: string,
 	customToolNameToSdk?: Map<string, string>,
 	modelId?: string,
+	persist = true,
 ): SyncResult | undefined {
 	const parentKey = piSessionId ? forkParents.get(piSessionId) : undefined;
 	if (!parentKey) return undefined;
-	const parent = sessionStateFor(parentKey) ?? restoreSession(parentKey, cwd);
+	const parent = sessionStateFor(parentKey) ?? (persist ? restoreSession(parentKey, cwd) : null);
 	if (!parent?.checkpoints?.length) return undefined;
 	const match = bestCheckpoint(parent.checkpoints, priorMessages);
 	if (!match) return undefined;
@@ -925,7 +927,7 @@ function forkFromParent(
 	const leaf = writeTranscript(targetId, cwd, claudeConfigDir(), chain, convertMessagesToRecords(missed, targetId, cwd, customToolNameToSdk, modelId));
 	const forked: SessionState = { sessionId: targetId, cursor: priorMessages.length, cwd, piSessionId: owner, synced, checkpoints: [{ length: priorMessages.length, hash: synced.hash, leaf, trailingAssistant: false }] };
 	setSessionStateFor(piSessionId, forked);
-	persistSession(piSessionId, forked);
+	if (persist) persistSession(piSessionId, forked);
 	debug(`Case 6 fork with tail: pi session ${owner?.slice(0, 8)} copies ${chain.length} records of ${parent.sessionId.slice(0, 8)} and appends ${missed.length} pi message(s) → session ${targetId.slice(0, 8)}`);
 	return { sessionId: targetId, path: "fork", forkBase: `${parent.sessionId}:${match.checkpoint.leaf}`, preservedRecords: chain.length };
 }
@@ -1014,7 +1016,7 @@ function syncSharedSession(
 	cwd: string,
 	customToolNameToSdk?: Map<string, string>,
 	modelId?: string,
-	restore = true,
+	persist = true,
 ): SyncResult {
 	// System messages are pi's transcript representation of prompt and tool state, not
 	// conversation history — they are never imported into a CC session, so exclude them from
@@ -1023,7 +1025,7 @@ function syncSharedSession(
 	// every read and write below addresses sessionStateFor(piSessionId), so a
 	// foreign session's shape-matching context can never REUSE or rebuild another
 	// session's CC file.
-	const sharedSession = sessionStateFor(piSessionId) ?? (restore ? restoreSession(piSessionId, cwd) : null);
+	const sharedSession = sessionStateFor(piSessionId) ?? (persist ? restoreSession(piSessionId, cwd) : null);
 	const history = nonSystemMessages(messages);
 	const priorMessages = history.slice(0, turnStart(history)); // everything before the current user turn
 
@@ -1082,11 +1084,11 @@ function syncSharedSession(
 		return { sessionId: null, path: "fresh" };
 	}
 	if (sharedSession?.checkpoints?.length && !sharedSession.forkPending) {
-		const recovered = recoverFromCheckpoints(piSessionId, sharedSession, priorMessages, cwd, customToolNameToSdk, modelId);
+		const recovered = recoverFromCheckpoints(piSessionId, sharedSession, priorMessages, cwd, customToolNameToSdk, modelId, persist);
 		if (recovered) return recovered;
 	}
 	if (!sharedSession) {
-		const forked = forkFromParent(piSessionId, priorMessages, cwd, customToolNameToSdk, modelId);
+		const forked = forkFromParent(piSessionId, priorMessages, cwd, customToolNameToSdk, modelId, persist);
 		if (forked) return forked;
 	}
 	const previousSessionId = sharedSession?.forkPending ? undefined : sharedSession?.sessionId;
@@ -1124,7 +1126,7 @@ function syncSharedSession(
 		...(rebuiltLeaf ? { checkpoints: [{ length: priorMessages.length, hash: rebuiltSynced.hash, leaf: rebuiltLeaf.uuid, trailingAssistant: false }] } : {}),
 	};
 	setSessionStateFor(piSessionId, rebuiltState);
-	persistSession(piSessionId, rebuiltState);
+	if (persist) persistSession(piSessionId, rebuiltState);
 	if (previousSessionId === undefined) {
 		debug(`Case 2: first turn with ${priorMessages.length} prior messages → session ${session.sessionId.slice(0, 8)}, ${session.records.length} records`);
 	} else if (preserveId) {
@@ -1189,6 +1191,7 @@ export const __test = {
 	extractUserPromptBlocks,
 	consumeQuery,
 	finalizeCurrentStream,
+	finishQuery,
 	resultErrorText,
 	deliverToolResults,
 	drainForAbort,
@@ -1497,8 +1500,8 @@ function finalizeCurrentStream(c: QueryContext, stopReason?: string): void {
 	debug(`provider: finalizeCurrentStream called, stopReason=${stopReason}, turnOutput=${JSON.stringify({stopReason: c.turnOutput!.stopReason, error: c.turnOutput!.errorMessage})}`);
 	if (!c.turnStarted) ensureTurnStarted(c);
 	const stream = c.currentPiStream;
-	if (c.turnOutput.stopReason === "error") {
-		stream!.push({ type: "error", reason: "error", error: c.turnOutput });
+	if (c.turnOutput.stopReason === "error" || c.turnOutput.stopReason === "aborted") {
+		stream!.push({ type: "error", reason: c.turnOutput.stopReason, error: c.turnOutput });
 	} else {
 		const reason = stopReason === "length" ? "length" : "stop";
 		stream!.push({ type: "done", reason, message: c.turnOutput });
@@ -1506,6 +1509,21 @@ function finalizeCurrentStream(c: QueryContext, stopReason?: string): void {
 	markStreamComplete(stream);
 	stream!.end();
 	c.currentPiStream = null;
+}
+
+function finishQuery(c: QueryContext, sdkQuery: Pick<ReturnType<typeof query>, "close">, promptStream: PromptStream, settleStream = false): void {
+	promptStream.fail(new Error("query ended"));
+	if (c.promptStream === promptStream) c.promptStream = null;
+	if (c.activeQuery === sdkQuery || c.activeQuery === null) {
+		c.releasePendingToolCalls("Query ended");
+		c.activeQuery = null;
+		activeQueryContexts.delete(c);
+	}
+	try {
+		sdkQuery.close();
+	} finally {
+		if (settleStream && !abandonedQueries.has(sdkQuery)) finalizeCurrentStream(c, c.turnOutput?.stopReason);
+	}
 }
 
 /** Maps Anthropic stream events to pi stream events (text, thinking, toolcall).
@@ -2344,11 +2362,13 @@ function streamClaudeAgentSdk(model: Model<any>, context: Context, options?: Sim
 					queryCtx.turnOutput.stopReason = "aborted";
 					queryCtx.turnOutput.errorMessage = "Operation aborted";
 				}
-				const stream = queryCtx.currentPiStream;
-				stream?.push({ type: "error", reason: "aborted", error: queryCtx.turnOutput! });
-				markStreamComplete(stream);
-				stream?.end();
-				queryCtx.currentPiStream = null;
+				if (!turn) {
+					const stream = queryCtx.currentPiStream;
+					stream?.push({ type: "error", reason: "aborted", error: queryCtx.turnOutput! });
+					markStreamComplete(stream);
+					stream?.end();
+					queryCtx.currentPiStream = null;
+				}
 				return;
 			}
 
@@ -2404,11 +2424,11 @@ function streamClaudeAgentSdk(model: Model<any>, context: Context, options?: Sim
 				}
 			}
 
-			if (!isReentrant && queryCtx.activeQuery === sdkQuery) {
+			if (!turn && !isReentrant && queryCtx.activeQuery === sdkQuery) {
 				debug("provider: clearing activeQuery before final stream completion");
 				queryCtx.activeQuery = null;
 			}
-			finalizeCurrentStream(queryCtx, queryCtx.turnOutput?.stopReason);
+			if (!turn) finalizeCurrentStream(queryCtx, queryCtx.turnOutput?.stopReason);
 		})
 		.catch((error) => {
 			debug(`provider: query error, model=${cliModel}, aborted=${Boolean(options?.signal?.aborted)}, error=`, error);
@@ -2436,37 +2456,23 @@ function streamClaudeAgentSdk(model: Model<any>, context: Context, options?: Sim
 				// result, so prefer the cause consumeQuery recorded off the result itself.
 				queryCtx.turnOutput.errorMessage ??= error instanceof Error ? error.message : String(error);
 			}
-			if (!isReentrant && queryCtx.activeQuery === sdkQuery) {
+			if (!turn && !isReentrant && queryCtx.activeQuery === sdkQuery) {
 				queryCtx.releasePendingToolCalls("Query ended");
 				debug("provider: clearing activeQuery before error stream completion");
 				queryCtx.activeQuery = null;
 			}
-			const stream = queryCtx.currentPiStream;
-			stream?.push({ type: "error", reason: (queryCtx.turnOutput?.stopReason ?? "error") as "aborted" | "error", error: queryCtx.turnOutput! });
-			markStreamComplete(stream);
-			stream?.end();
-			queryCtx.currentPiStream = null;
+			if (!turn) {
+				const stream = queryCtx.currentPiStream;
+				stream?.push({ type: "error", reason: (queryCtx.turnOutput?.stopReason ?? "error") as "aborted" | "error", error: queryCtx.turnOutput! });
+				markStreamComplete(stream);
+				stream?.end();
+				queryCtx.currentPiStream = null;
+			}
 		})
 		.finally(() => {
 			releaseForkGate();
 			if (options?.signal) options.signal.removeEventListener("abort", onAbort);
-			// Settle any ack still parked in the generator — the CLI is gone, so
-			// nothing will resume it. Clear the handle only if a later query
-			// hasn't already claimed the shared context.
-			promptStream.fail(new Error("query ended"));
-			if (queryCtx.promptStream === promptStream) queryCtx.promptStream = null;
-			// A later query claiming this context sets activeQuery to its own handle;
-			// null means the .then/.catch above cleared ours and nothing replaced it.
-			// Testing only for `=== sdkQuery` would never fire on the non-reentrant
-			// path, leaving the top-level context in the routing set forever — where a
-			// later orphaned tool result matches its stale turnToolCallIds and takes
-			// the delivery branch, returning a stream nothing ends.
-			if (queryCtx.activeQuery === sdkQuery || queryCtx.activeQuery === null) {
-				queryCtx.releasePendingToolCalls("Query ended");
-				queryCtx.activeQuery = null;
-				activeQueryContexts.delete(queryCtx);
-			}
-			sdkQuery.close();
+			finishQuery(queryCtx, sdkQuery, promptStream, Boolean(turn));
 		});
 
 	return stream;

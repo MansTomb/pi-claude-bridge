@@ -10,7 +10,7 @@ Import `createOptChatExtension`, `createOptChatTurn`, and the `OptChatTurn` type
 
 - `turnId` is the caller's nonempty top-level delivery identity.
 - `streamSimple(model, context, options)` is a Pi provider callback bound to that handle's private session key and query context.
-- `release()` forgets the handle's in-memory session mirror and prevents later calls. It is idempotent after settlement and throws while its SDK query remains active. Abort through Pi's signal and wait for provider teardown before releasing an interrupted turn.
+- `release()` forgets the handle's in-memory session mirror and prevents later calls. It is idempotent after settlement and throws while its SDK query remains active. Final success, error, and abort results settle after provider teardown, so release is safe immediately after `await stream.result()`. A tool-use result only parks the query for tool delivery and does not allow release. Abort through Pi's signal before releasing an interrupted turn.
 
 `createOptChatExtension({ turnForRequest })` returns a Pi extension factory. The synchronous resolver receives the provider's `SimpleStreamOptions` and returns the handle that owns the request. Missing ownership must throw before transport. The harness owns that association, including its lifetime. The bridge adds no process-global turn registry.
 
@@ -73,7 +73,7 @@ npm run test:optchat-unit
 git diff --check
 ```
 
-`test:optchat-unit` explicitly selects fixed-input conversion, in-memory import, transcript replay, and option-construction tests. It does not call an SDK query, Pi prompt, fake endpoint, or live provider. The in-memory import fixture never saves its session records.
+`test:optchat-unit` explicitly selects fixed-input conversion, in-memory import, transcript replay, option construction, query teardown, and checkpoint persistence tests. It does not call an SDK query, Pi prompt, fake endpoint, or live provider. The in-memory import fixture never saves its session records. Checkpoint tests write fixed transcripts and sidecars only under the preload's temporary Claude directory, which it removes on exit. Teardown tests use fixed lifecycle resources without invoking an SDK query.
 
 The following existing regression commands send agent prompts and require approval of each concrete run. They test default ludocosm behavior, not the OptChat handle API:
 
