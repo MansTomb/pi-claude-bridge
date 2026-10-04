@@ -4,7 +4,7 @@
 
 - **Add: isolated prompt-cache refresh** — expose `refreshSessionCache` for completed provider sessions, preserving the prompt, tools and effort on a non-persisted native fork with one-token output and immediate process termination at the first response.
 
-- **Add: opt-in OptChat turn sessions** — expose explicit transport turn handles, retain the existing SDK tool loop, preserve structured user blocks, and retain native Claude Code caching. Settle final OptChat streams after teardown and skip checkpoint sidecar reads and writes through rebuild and recovery. Remove the OptChat cache overrides that caused five breakpoints after CLIProxy added its own.
+- **Add: opt-in OptChat turn sessions** — expose explicit transport turn handles, retain the existing SDK tool loop, preserve structured user blocks, and retain native Claude Code caching. Settle final OptChat streams after teardown and skip checkpoint sidecar reads and writes through rebuild and recovery. Keep native caching as the default; an explicit `cachePolicy: "optchat"` reserves three caller view marks plus a five-minute automatic end marker when the gateway preserves caller-owned layouts.
 - **Add: durable host lifecycle** — export fork-parent registration and settled-session release without resetting the process provider; release settled fork gates.
 - **Bump: Pi 1.0** — align development and peer packages with the Durable integration.
 

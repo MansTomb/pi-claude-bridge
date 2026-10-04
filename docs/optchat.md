@@ -54,11 +54,11 @@ Pi's existing `cacheRetention: "none"` one-off summarization path remains isolat
 
 The harness supplies structured Pi text blocks with Anthropic `cache_control` metadata. `BridgeTextContent` in `src/user-content.ts` extends Pi's text type with the SDK's cache and citation fields. The bridge preserves those fields, text bytes, and block order in prompt extraction, steering, conversion, and in-memory `cc-session-io` imports. OptChat also preserves unmarked text-array boundaries. Ordinary unmarked default-provider text retains its previous string fallback and empty-block filtering.
 
-The managed harness supplies the memory view as ordinary text. Cache placement and lifetime belong to Claude Code and the existing CLIProxy configuration. OptChat no longer sets `DISABLE_PROMPT_CACHING` or injects top-level `cache_control` through `CLAUDE_CODE_EXTRA_BODY`. Endpoint and authentication environment handling stays the same as the default bridge path.
+The default policy is `native`. It leaves Claude Code's cache environment unchanged. `createOptChatTurn({ turnId, cachePolicy: "optchat" })` instead reserves the request-end breakpoint through a top-level `{ "cache_control": { "type": "ephemeral", "ttl": "5m" } }`. It sets `DISABLE_PROMPT_CACHING=1` in that query's child environment to suppress Claude Code's automatic block marks. The caller supplies at most three explicit memory marks. Other extra-body fields, endpoint, authentication, and process environment remain unchanged.
 
-Iwanna approved this compatibility tradeoff on 4 October 2026. The original three view breakpoints plus one request-end breakpoint are deferred. The saved failed request showed the injected top-level marker plus four block markers added by CLIProxy, which Anthropic rejected. CLIProxy's limiter counted block markers but omitted the top-level marker. Removing our override avoids that conflict without changing the proxy.
+The `optchat` policy requires a gateway that preserves caller-owned cache layouts. CLIProxy v8.0.3 at `acdace9` adds block markers and ignores the top-level marker in its limit, so enabling this policy against that unpatched proxy can fail with five breakpoints. The paired proxy patch treats top-level automatic caching as caller ownership, preserves supplied block annotations, and counts the request-end slot. Keep `native` until that patch is installed and verified.
 
-Structured cache metadata remains supported for other bridge callers. The harness no longer generates it. Existing fixed-data tests cover structured content, fresh-turn identity, history import, and teardown. Live responses and cache savings still require an approved test through Claude Code and CLIProxy.
+Fixed-data tests cover both policies and preservation through conversion. They do not establish the final Claude Code request or cache-hit usage. Those checks require the approved request path through the SDK, Claude Code, and CLIProxy.
 
 ## Verification commands
 

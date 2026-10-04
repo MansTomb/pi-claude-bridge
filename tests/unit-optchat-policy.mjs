@@ -8,7 +8,7 @@ import { QueryContext } from "../src/query-state.js";
 import { makePromptStream } from "../src/prompt-stream.js";
 import { readPersistedSession } from "../src/transcript-checkpoints.js";
 import { convertPiMessages } from "../src/convert.js";
-import { createTurnSessionPolicy, turnStreamOptions } from "../src/session-policy.js";
+import { createTurnSessionPolicy, turnStreamOptions, turnQueryOptions } from "../src/session-policy.js";
 import { __test, createOptChatTurn, registerForkParent, releaseSession } from "../src/index.js";
 
 const view = [
@@ -136,6 +136,33 @@ describe("OptChat transport policy", () => {
 		assert.deepEqual(createTurnSessionPolicy({ turnId: "delivery-one", sessionKey: "turn-one" }), first);
 		assert.deepEqual(createTurnSessionPolicy({ turnId: "delivery-two", sessionKey: "turn-two" }), second);
 		assert.throws(() => createTurnSessionPolicy({ turnId: " ", sessionKey: "turn-one" }), /nonempty transport turnId/);
+	});
+});
+
+describe("OptChat caller-owned cache options", () => {
+	const policy = createTurnSessionPolicy({ turnId: "delivery", sessionKey: "session", cachePolicy: "optchat" });
+	it("leaves ordinary and native-cache sessions untouched", () => {
+		const options = { cwd: "/synthetic", env: { CLAUDE_CODE_EXTRA_BODY: "not inspected" } };
+		assert.equal(turnQueryOptions(options), options);
+		assert.equal(turnQueryOptions(options, createTurnSessionPolicy({ turnId: "a", sessionKey: "b" })), options);
+		assert.equal(turnQueryOptions(options, { ...policy, cachePolicy: "native" }), options);
+	});
+	it("supplies one five-minute automatic marker and disables only native automatic marks", () => {
+		const options = { cwd: "/synthetic", env: { ANTHROPIC_BASE_URL: "https://gateway.invalid", ANTHROPIC_AUTH_TOKEN: "fixture", CLAUDE_CODE_EXTRA_BODY: '{"metadata":{"user_id":"fixture"},"cache_control":{"type":"ephemeral","ttl":"1h"}}' } };
+		const before = structuredClone(options);
+		const result = turnQueryOptions(options, policy);
+		assert.equal(result.cwd, options.cwd);
+		assert.equal(result.env.ANTHROPIC_BASE_URL, options.env.ANTHROPIC_BASE_URL);
+		assert.equal(result.env.ANTHROPIC_AUTH_TOKEN, "fixture");
+		assert.equal(result.env.DISABLE_PROMPT_CACHING, "1");
+		assert.deepEqual(JSON.parse(result.env.CLAUDE_CODE_EXTRA_BODY), { metadata: { user_id: "fixture" }, cache_control: { type: "ephemeral", ttl: "5m" } });
+		assert.deepEqual(options, before);
+	});
+	it("uses a child environment and rejects malformed extra-body objects", () => {
+		const result = turnQueryOptions({}, policy);
+		assert.deepEqual(result.env, { DISABLE_PROMPT_CACHING: "1", CLAUDE_CODE_EXTRA_BODY: '{"cache_control":{"type":"ephemeral","ttl":"5m"}}' });
+		for (const raw of ["null", "[]", "1", '"text"', "{"])
+			assert.throws(() => turnQueryOptions({ env: { CLAUDE_CODE_EXTRA_BODY: raw } }, policy));
 	});
 });
 

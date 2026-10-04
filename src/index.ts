@@ -31,7 +31,7 @@ import { buildActionSummary, type ToolCallState } from "./askclaude-ui.js";
 import { askClaudeCallTags, askClaudeToolDescription, buildAskClaudeParams, resolveAskClaudeDefaults, resolveAskClaudeMode, type AskClaudeMode } from "./askclaude-schema.js";
 import { nonSystemMessages, toBridgeContext } from "./transcript.js";
 import { userTextBlock } from "./user-content.js";
-import { createTurnSessionPolicy, turnStreamOptions, type TurnSessionPolicy } from "./session-policy.js";
+import { createTurnSessionPolicy, turnStreamOptions, turnQueryOptions, type TurnSessionPolicy, type OptChatTurnOptions } from "./session-policy.js";
 
 // --- Debug logging ---
 // CLAUDE_BRIDGE_DEBUG=1 enables debug logging to ~/.pi/agent/claude-bridge.log
@@ -2276,7 +2276,7 @@ function streamClaudeAgentSdk(model: Model<any>, context: Context, options?: Sim
 	// also autocompact would double-flush the prompt cache and races pi's
 	// threshold with CC's, including CC's anti-thrashing guard (issue #8).
 	// Manual /compact in CC still works (we never invoke it).
-	const queryOptions: NonNullable<Parameters<typeof query>[0]["options"]> = {
+	const queryOptions = turnQueryOptions({
 		cwd,
 		env: childEnv,
 		tools: [],
@@ -2305,7 +2305,7 @@ function streamClaudeAgentSdk(model: Model<any>, context: Context, options?: Sim
 		...(syncResult.fork ? { forkSession: true } : {}),
 		...(claudeExecutable ? { pathToClaudeCodeExecutable: claudeExecutable } : {}),
 		...makeCliDebugOptions("provider"),
-	};
+	}, turn?.policy);
 
 	debug("provider: fresh query",
 		`model=${cliModel} msgs=${context.messages.length} tools=${mcpTools.length}`,
@@ -2685,8 +2685,9 @@ export interface OptChatTurn {
 	release(): void;
 }
 
-export function createOptChatTurn({ turnId }: { turnId: string }): OptChatTurn {
-	const policy = createTurnSessionPolicy({ turnId, sessionKey: randomUUID() });
+export function createOptChatTurn(options: OptChatTurnOptions): OptChatTurn {
+	const policy = createTurnSessionPolicy({ ...options, sessionKey: randomUUID() });
+	const { turnId } = policy;
 	const queryContext = new QueryContext();
 	let released = false;
 	return Object.freeze({
