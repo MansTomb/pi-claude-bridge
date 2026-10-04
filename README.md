@@ -4,6 +4,8 @@
 
 Pi extension that integrates Claude Code via the [Agent SDK](https://github.com/anthropics/claude-agent-sdk-typescript). Originally based on [claude-agent-sdk-pi](https://github.com/prateekmedia/claude-agent-sdk-pi) by Prateek Sunal.
 
+Managed harnesses can use the [opt-in OptChat transport policy](docs/optchat.md) for a fresh Claude Code conversation per top-level turn. Default bridge sessions keep their existing behavior.
+
 1. **Provider** — Use Opus/Sonnet/Haiku as models in pi, with all tool calls flowing through pi's TUI
 2. **AskClaude tool** — Delegate tasks or questions to Claude Code when using another provider
 

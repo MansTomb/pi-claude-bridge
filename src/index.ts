@@ -1,6 +1,6 @@
 import { calculateCost, createAssistantMessageEventStream, type AssistantMessage, type AssistantMessageEventStream, type Context, type ImageContent, type Model, type SimpleStreamOptions, type TextContent, type Tool, type UserMessage } from "@earendil-works/pi-ai";
 import { getModels } from "@earendil-works/pi-ai/compat";
-import { buildSessionContext, compact, generateBranchSummary, keyHint, type BranchSummaryResult, type CompactionEntry, type ExtensionAPI, type ExtensionContext, type ExtensionUIContext } from "@earendil-works/pi-coding-agent";
+import { buildSessionContext, compact, generateBranchSummary, keyHint, type BranchSummaryResult, type CompactionEntry, type ExtensionAPI, type ExtensionContext, type ExtensionUIContext, type ProviderConfig } from "@earendil-works/pi-coding-agent";
 import { refreshCache, type CacheRefreshSnapshot, type CacheRefreshResult } from "./cache-refresh.js";
 export type { CacheRefreshResult } from "./cache-refresh.js";
 import { query, type EffortLevel, type SDKMessage, type SettingSource } from "@anthropic-ai/claude-agent-sdk";
@@ -30,6 +30,8 @@ import { createToolServer } from "./mcp-server.js";
 import { buildActionSummary, type ToolCallState } from "./askclaude-ui.js";
 import { askClaudeCallTags, askClaudeToolDescription, buildAskClaudeParams, resolveAskClaudeDefaults, resolveAskClaudeMode, type AskClaudeMode } from "./askclaude-schema.js";
 import { nonSystemMessages, toBridgeContext } from "./transcript.js";
+import { userTextBlock } from "./user-content.js";
+import { createTurnSessionPolicy, optChatQueryOptions, turnStreamOptions, type TurnSessionPolicy } from "./session-policy.js";
 
 // --- Debug logging ---
 // CLAUDE_BRIDGE_DEBUG=1 enables debug logging to ~/.pi/agent/claude-bridge.log
@@ -328,13 +330,13 @@ function convertMessagesToRecords(
 	return [...scratch.records];
 }
 
-function recordCompletedQuery(piSessionId: string | null | undefined, sessionId: string, _cwd: string, context: Context["messages"], leaf: string): void {
+function recordCompletedQuery(piSessionId: string | null | undefined, sessionId: string, _cwd: string, context: Context["messages"], leaf: string, persist = true): void {
 	const state = sessionStateFor(piSessionId);
 	if (!state || state.sessionId !== sessionId) return;
 	const checkpoint: Checkpoint = { length: context.length, hash: fingerprintMessages(context), leaf, trailingAssistant: true };
 	const updated = { ...state, checkpoints: appendCheckpoint(state.checkpoints ?? [], checkpoint) };
 	setSessionStateFor(piSessionId, updated);
-	persistSession(piSessionId, updated);
+	if (persist) persistSession(piSessionId, updated);
 }
 
 function recordForkParent(piSessionId: string, sessionFile: string | undefined): void {
@@ -580,15 +582,16 @@ function extractUserPrompt(messages: Context["messages"]): string | null {
 		.join("\n");
 }
 
-/** Extract the current user turn as ContentBlockParam[] (preserving images).
- *  Returns null if no images — caller should fall back to string prompt. */
-function extractUserPromptBlocks(messages: Context["messages"]): ContentBlockParam[] | null {
+function extractUserPromptBlocks(messages: Context["messages"], preserveTextBlocks = false): ContentBlockParam[] | null {
 	const turn = messages.slice(turnStart(messages)) as UserMessage[];
 	if (turn.length === 0) return null;
 
 	let hasImage = false;
+	let hasMetadata = false;
+	let hasTextBlocks = false;
 	const blocks: ContentBlockParam[] = [];
 	for (const message of turn) {
+		hasTextBlocks ||= Array.isArray(message.content);
 		const content: (TextContent | ImageContent)[] = typeof message.content === "string"
 			? [{ type: "text", text: message.content }]
 			: message.content;
@@ -602,7 +605,9 @@ function extractUserPromptBlocks(messages: Context["messages"]): ContentBlockPar
 		}
 		for (const block of content) {
 			if (block.type === "text" && block.text) {
-				blocks.push({ type: "text", text: block.text });
+				const textBlock = userTextBlock(block);
+				hasMetadata ||= textBlock.cache_control !== undefined || textBlock.citations !== undefined;
+				blocks.push(textBlock);
 			} else if (block.type === "image") {
 				// Guard before logging: data-less image blocks do occur, and reading
 				// .length off the missing field in the debug template would throw
@@ -625,7 +630,7 @@ function extractUserPromptBlocks(messages: Context["messages"]): ContentBlockPar
 		}
 	}
 	debug(`extractUserPromptBlocks: ${turn.length} msgs in turn, ${blocks.length} blocks, types=${blocks.map((b) => b.type).join(",")}`);
-	return hasImage ? blocks : null;
+	return hasImage || hasMetadata || (preserveTextBlocks && hasTextBlocks && blocks.length > 0) ? blocks : null;
 }
 
 function newAssistantOutput(model: Model<any>, text: string, stopReason: AssistantMessage["stopReason"], errorMessage?: string): AssistantMessage {
@@ -1009,6 +1014,7 @@ function syncSharedSession(
 	cwd: string,
 	customToolNameToSdk?: Map<string, string>,
 	modelId?: string,
+	restore = true,
 ): SyncResult {
 	// System messages are pi's transcript representation of prompt and tool state, not
 	// conversation history — they are never imported into a CC session, so exclude them from
@@ -1017,7 +1023,7 @@ function syncSharedSession(
 	// every read and write below addresses sessionStateFor(piSessionId), so a
 	// foreign session's shape-matching context can never REUSE or rebuild another
 	// session's CC file.
-	const sharedSession = sessionStateFor(piSessionId) ?? restoreSession(piSessionId, cwd);
+	const sharedSession = sessionStateFor(piSessionId) ?? (restore ? restoreSession(piSessionId, cwd) : null);
 	const history = nonSystemMessages(messages);
 	const priorMessages = history.slice(0, turnStart(history)); // everything before the current user turn
 
@@ -1859,8 +1865,8 @@ async function consumeQuery(
 
 /** The trailing user turn as content blocks, or null if there isn't one.
  *  Blocks rather than text so image steers keep their images. */
-function steerBlocks(messages: Context["messages"]): ContentBlockParam[] | null {
-	const blocks = extractUserPromptBlocks(messages);
+function steerBlocks(messages: Context["messages"], preserveTextBlocks = false): ContentBlockParam[] | null {
+	const blocks = extractUserPromptBlocks(messages, preserveTextBlocks);
 	if (blocks) return blocks;
 	const text = extractUserPrompt(messages);
 	return text ? [{ type: "text", text }] : null;
@@ -2006,7 +2012,11 @@ function discardRewrittenQuery(c: QueryContext): void {
 
 /** Provider entry point. Pi calls this for each new prompt and each tool result.
  *  Two cases: tool result delivery (active query) or fresh query. */
-function streamClaudeAgentSdk(model: Model<any>, context: Context, options?: SimpleStreamOptions): AssistantMessageEventStream {
+function streamClaudeAgentSdk(model: Model<any>, context: Context, options?: SimpleStreamOptions, turn?: { policy: TurnSessionPolicy; queryContext: QueryContext }): AssistantMessageEventStream {
+	const baseContext = turn?.queryContext ?? ctx();
+	const childEnv = { ...process.env, ...CC_CHILD_ENV };
+	const transportOptions = turn ? optChatQueryOptions({ env: childEnv }) : { env: childEnv };
+	if (turn) options = turnStreamOptions(options, turn.policy);
 	showStartupNoticeOnce();
 	if (options?.sessionId) cacheRefreshSnapshots.delete(options.sessionId);
 	// pi hands providers a transcript (prompt/tools folded into system messages) — fold it
@@ -2029,11 +2039,14 @@ function streamClaudeAgentSdk(model: Model<any>, context: Context, options?: Sim
 
 	// DEBUG: trace followUp message triggering
 	const lastMsgRole = context.messages[context.messages.length - 1]?.role;
-	debug(`provider: streamClaudeAgentSdk called, activeQuery=${!!ctx().activeQuery}, lastMsgRole=${lastMsgRole}, isReentrant=${ctx().activeQuery !== null}`);
+	debug(`provider: streamClaudeAgentSdk called, activeQuery=${!!baseContext.activeQuery}, lastMsgRole=${lastMsgRole}, isReentrant=${baseContext.activeQuery !== null}`);
 
-	let activeQuery = ctx().activeQuery !== null;
+	let activeQuery = baseContext.activeQuery !== null;
 	const allResults = activeQueryContexts.size > 0 ? extractAllToolResults(context) : [];
 	let resultCtx = allResults.length > 0 ? contextForToolResults(allResults) : undefined;
+	if (turn && resultCtx && resultCtx.piSessionId !== turn.policy.sessionKey) {
+		throw new Error("OptChat tool results belong to another transport turn");
+	}
 
 	// pi rewrote its history while this query sat parked at a tool boundary, so the
 	// query answers about a conversation that no longer exists. Discard it and let
@@ -2046,12 +2059,12 @@ function streamClaudeAgentSdk(model: Model<any>, context: Context, options?: Sim
 		discardRewrittenQuery(resultCtx);
 		resultCtx = undefined;
 		// Recomputed, not cleared: a reentrant subagent may still hold a query of its own.
-		activeQuery = ctx().activeQuery !== null;
+		activeQuery = baseContext.activeQuery !== null;
 	}
 
 	const isReentrantUserQuery = activeQuery && lastMsgRole === "user" && allResults.length === 0;
 	if (isReentrantUserQuery) {
-		debug(`provider: active query user-only call treated as reentrant fresh query, waitingHandlers=${ctx().pendingToolCalls.size}, ctx.msgs=${context.messages.length}`);
+		debug(`provider: active query user-only call treated as reentrant fresh query, waitingHandlers=${baseContext.pendingToolCalls.size}, ctx.msgs=${context.messages.length}`);
 	}
 
 	// --- Tool result delivery ---
@@ -2069,7 +2082,7 @@ function streamClaudeAgentSdk(model: Model<any>, context: Context, options?: Sim
 		// User messages (steer/followUp) pi injected into context during the
 		// active query: a steer sent while a tool was executing, drained by pi at
 		// the turn boundary and appended alongside the tool result.
-		const steer = lastMsgRole === "user" ? steerBlocks(context.messages) : null;
+		const steer = lastMsgRole === "user" ? steerBlocks(context.messages, Boolean(turn)) : null;
 		// Delivery is async because the steer must reach CC's stdin *before* the
 		// tool result does — see deliverToolResults. Detached so the provider
 		// still returns its stream synchronously.
@@ -2096,7 +2109,8 @@ function streamClaudeAgentSdk(model: Model<any>, context: Context, options?: Sim
 	// 1. Determine reentrancy. Reentrant queries get their own QueryContext so
 	//    background subagents can run concurrently with the parent query.
 	const isReentrant = activeQuery;
-	const queryCtx = isReentrant ? new QueryContext() : ctx();
+	if (turn && isReentrant) throw new Error("OptChat provider calls must continue the active tool loop; steering uses Pi's tool-boundary delivery");
+	const queryCtx = isReentrant ? new QueryContext() : baseContext;
 	debug(`provider: fresh query setup, isReentrant=${isReentrant}, activeContexts=${activeQueryContexts.size}`);
 
 	// Resolved first: an unaccountable system prompt throws, and doing that before
@@ -2146,7 +2160,7 @@ function streamClaudeAgentSdk(model: Model<any>, context: Context, options?: Sim
 	// rewrites (session_compact / session_tree) and for SessionState above.
 	const piSessionId = options?.sessionId ?? null;
 	const lastResponseAt = sessionStateFor(piSessionId)?.lastResponseAt;
-	const syncResult = syncSharedSession(piSessionId, context.messages, cwd, customToolNameToSdk, cliModel);
+	const syncResult = syncSharedSession(piSessionId, context.messages, cwd, customToolNameToSdk, cliModel, !turn);
 	// This query starts from the history pi has now: consume this session's
 	// armed rewrite — a sibling pi session's stays armed for its own queries.
 	if (piSessionId) historyRewrittenBySession.delete(piSessionId);
@@ -2160,7 +2174,7 @@ function streamClaudeAgentSdk(model: Model<any>, context: Context, options?: Sim
 		...(resumeSessionId ? { resumedSessionId: resumeSessionId } : {}),
 		...(lastResponseAt !== undefined ? { secondsSinceLastResponse: Math.round((Date.now() - lastResponseAt) / 1000) } : {}),
 	};
-	const promptBlocks = extractUserPromptBlocks(context.messages);
+	const promptBlocks = extractUserPromptBlocks(context.messages, Boolean(turn));
 	let promptText = extractUserPrompt(context.messages) ?? "";
 
 	// A turn continuing past a discarded query ends at its tool result, not at a
@@ -2245,10 +2259,9 @@ function streamClaudeAgentSdk(model: Model<any>, context: Context, options?: Sim
 	// also autocompact would double-flush the prompt cache and races pi's
 	// threshold with CC's, including CC's anti-thrashing guard (issue #8).
 	// Manual /compact in CC still works (we never invoke it).
-	const childEnv = { ...process.env, ...CC_CHILD_ENV };
 	const queryOptions: NonNullable<Parameters<typeof query>[0]["options"]> = {
 		cwd,
-		env: childEnv,
+		...transportOptions,
 		tools: [],
 		permissionMode: "bypassPermissions",
 		includePartialMessages: true,
@@ -2281,7 +2294,7 @@ function streamClaudeAgentSdk(model: Model<any>, context: Context, options?: Sim
 		`model=${cliModel} msgs=${context.messages.length} tools=${mcpTools.length}`,
 		`resume=${resumeSessionId?.slice(0, 8) ?? "none"} effort=${effort ?? "default"}`,
 		`ctxFiles=${promptCapture?.contextFiles.length ?? 0} strictMcp=${strictMcpConfigEnabled}`,
-		`prompt=${promptText.slice(0, 60)}${promptBlocks ? " [+images]" : ""}`);
+		`prompt=${promptText.slice(0, 60)}${promptBlocks ? " [+blocks]" : ""}`);
 
 	// 3. Start SDK query and claim it for this context
 	let wasAborted = false;
@@ -2379,8 +2392,8 @@ function streamClaudeAgentSdk(model: Model<any>, context: Context, options?: Sim
 						...(checkpoints?.length ? { checkpoints } : {}),
 					});
 					if (queryCtx.turnOutput?.stopReason !== "error" && queryCtx.lastAssistantUuid) {
-						recordCompletedQuery(queryCtx.piSessionId, sessionId, cwd, lastContext, queryCtx.lastAssistantUuid);
-						if (queryCtx.piSessionId && !needsRebuild) {
+						recordCompletedQuery(queryCtx.piSessionId, sessionId, cwd, lastContext, queryCtx.lastAssistantUuid, !turn);
+						if (!turn && queryCtx.piSessionId && !needsRebuild) {
 							const { mcpServers: _servers, ...refreshOptions } = queryOptions;
 							cacheRefreshSnapshots.set(queryCtx.piSessionId, {
 								options: refreshOptions, tools: structuredClone(mcpTools),
@@ -2661,7 +2674,36 @@ const PREVIEW_MAX_LINES = 6;
 
 let askClaudeToolName = "AskClaude";
 
-export default function (pi: ExtensionAPI) {
+export interface OptChatTurn {
+	readonly turnId: string;
+	readonly streamSimple: NonNullable<ProviderConfig["streamSimple"]>;
+	release(): void;
+}
+
+export function createOptChatTurn({ turnId }: { turnId: string }): OptChatTurn {
+	const policy = createTurnSessionPolicy({ turnId, sessionKey: randomUUID() });
+	const queryContext = new QueryContext();
+	let released = false;
+	return Object.freeze({
+		turnId,
+		streamSimple: (model, context, options) => {
+			if (released) throw new Error(`Claude bridge turn ${turnId} has been released`);
+			return streamClaudeAgentSdk(model, context, options, { policy, queryContext });
+		},
+		release: () => {
+			releaseSession(policy.sessionKey);
+			released = true;
+		},
+	} satisfies OptChatTurn);
+}
+
+export function createOptChatExtension({ turnForRequest }: {
+	turnForRequest: (options: SimpleStreamOptions | undefined) => OptChatTurn;
+}): (pi: ExtensionAPI) => void {
+	return (pi) => activate(pi, (model, context, options) => turnForRequest(options).streamSimple(model, context, options));
+}
+
+export default function activate(pi: ExtensionAPI, optChatStream?: NonNullable<ProviderConfig["streamSimple"]>) {
 	// Disable non-essential Claude Code traffic (update checks, MCP registry, telemetry)
 	process.env.CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC = "1";
 
@@ -2900,11 +2942,11 @@ export default function (pi: ExtensionAPI) {
 		apiKey: "not-used",
 		api: "claude-bridge",
 		models: registeredModels,
-		// Cast: the Provider interface passes a TranscriptContext; the bridge takes plain
-		// Context models (toBridgeContext normalizes at the stream entry points).
-		streamSimple: streamClaudeAgentSdk as any,
-	};
-	if (!g[ACTIVE_STREAM_SIMPLE_KEY]) {
+		streamSimple: optChatStream ?? streamClaudeAgentSdk,
+	} satisfies ProviderConfig;
+	if (optChatStream) {
+		pi.registerProvider(PROVIDER_ID, providerConfig);
+	} else if (!g[ACTIVE_STREAM_SIMPLE_KEY]) {
 		// First instance: store our streamSimple and register.
 		g[ACTIVE_STREAM_SIMPLE_KEY] = streamClaudeAgentSdk;
 		pi.registerProvider(PROVIDER_ID, providerConfig);

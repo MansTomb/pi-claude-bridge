@@ -5,6 +5,7 @@ import type { Message as PiMessage } from "@earendil-works/pi-ai";
 import type { Message as SessionMessage } from "cc-session-io";
 import { pascalCase } from "change-case";
 import { MCP_TOOL_PREFIX } from "./skills.js";
+import { userTextBlock } from "./user-content.js";
 
 export const PROVIDER_ID = "claude-bridge";
 
@@ -122,7 +123,7 @@ export function convertPiMessages(
 			} else if (Array.isArray(msg.content)) {
 				const parts = [];
 				for (const block of msg.content) {
-					if (block.type === "text" && block.text) parts.push({ type: "text", text: block.text });
+					if (block.type === "text" && block.text) parts.push(userTextBlock(block));
 					else if (block.type === "image" && block.data && block.mimeType) {
 						parts.push({ type: "image", source: { type: "base64", media_type: block.mimeType, data: block.data } });
 					}

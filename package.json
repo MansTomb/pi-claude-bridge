@@ -21,11 +21,13 @@
   },
   "files": [
     "src",
+    "docs",
     "README.md",
     "LICENSE",
     "assets"
   ],
   "scripts": {
+    "test:optchat-unit": "node --import tsx --import ./tests/lib/setup.mjs --test tests/unit-optchat-policy.mjs tests/unit-import.mjs tests/unit-convert-determinism.mjs tests/unit-transcript-replay-order.mjs",
     "test:unit": "node --import tsx --import ./tests/lib/setup.mjs --test tests/unit-*.mjs",
     "test": "set -a && [ -f .env.test ] && . .env.test; set +a; CLAUDE_BRIDGE_TEST_LOG_DIR=$(mktemp -d); export CLAUDE_BRIDGE_TEST_LOG_DIR; npm run test:unit && tests/int-smoke.sh && tests/int-multi-turn.sh && tests/int-cache.sh && node --import tsx --test tests/int-*.mjs && node tests/lib/check-deadlock-logs.mjs \"$CLAUDE_BRIDGE_TEST_LOG_DIR\"",
     "test:usage": "tests/usage-test.sh",
