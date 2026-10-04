@@ -12,21 +12,33 @@ export interface CacheRefreshSnapshot {
 	checkpoint: string;
 }
 
-export type CacheRefreshResult =
-	| { kind: "refreshed"; cacheRead: number; cacheWrite: number; input: number }
-	| { kind: "unsupported"; reason: string };
-
 const responseStart = z.object({
 	type: z.literal("stream_event"),
 	event: z.object({
 		type: z.literal("message_start"),
 		message: z.object({ usage: z.object({
 			input_tokens: z.number(),
-			cache_read_input_tokens: z.number().optional(),
-			cache_creation_input_tokens: z.number().optional(),
+			cache_read_input_tokens: z.number().default(0),
+			cache_creation_input_tokens: z.number().default(0),
 		}) }),
 	}),
-});
+}).transform(({ event: { message: { usage } } }) => ({
+	kind: "refreshed" as const,
+	input: usage.input_tokens,
+	cacheRead: usage.cache_read_input_tokens,
+	cacheWrite: usage.cache_creation_input_tokens,
+}));
+
+export type CacheRefreshResult = z.output<typeof responseStart> | { kind: "unsupported"; reason: string };
+
+const readResponseStart = (line: string) => {
+	try {
+		const parsed = responseStart.safeParse(JSON.parse(line));
+		return parsed.success ? parsed.data : undefined;
+	} catch {
+		return undefined;
+	}
+};
 
 export async function refreshCache(snapshot: CacheRefreshSnapshot, signal?: AbortSignal): Promise<CacheRefreshResult> {
 	signal?.throwIfAborted();
@@ -61,26 +73,23 @@ export async function refreshCache(snapshot: CacheRefreshSnapshot, signal?: Abor
 				abortController: controller,
 				env: { ...snapshot.options.env, CLAUDE_CODE_MAX_OUTPUT_TOKENS: "1", CLAUDE_CODE_MAX_RETRIES: "0" },
 				spawnClaudeCodeProcess: options => {
-					child = spawn(options.command, options.args, { cwd: options.cwd, env: options.env, stdio: "pipe" });
-					exited = new Promise(resolve => { child?.once("exit", () => resolve()); child?.once("error", () => resolve()); });
+					const spawned = spawn(options.command, options.args, { cwd: options.cwd, env: options.env, stdio: "pipe" });
+					child = spawned;
+					exited = new Promise(resolve => { spawned.once("exit", () => resolve()); spawned.once("error", () => resolve()); });
 					let pending = "";
-					child.stdout.on("data", (data: Buffer) => {
-						pending += data.toString();
-						let newline: number;
-						while ((newline = pending.indexOf("\n")) >= 0) {
-							const line = pending.slice(0, newline);
-							pending = pending.slice(newline + 1);
-							let value: unknown;
-							try { value = JSON.parse(line); } catch { continue; }
-							const parsed = responseStart.safeParse(value);
-							if (!parsed.success || result) continue;
-							const usage = parsed.data.event.message.usage;
-							result = { kind: "refreshed", input: usage.input_tokens, cacheRead: usage.cache_read_input_tokens ?? 0, cacheWrite: usage.cache_creation_input_tokens ?? 0 };
+					spawned.stdout.on("data", (data: Buffer) => {
+						if (result) return;
+						const lines = (pending + data.toString()).split("\n");
+						pending = lines.pop() ?? "";
+						for (const line of lines) {
+							result = readResponseStart(line);
+							if (!result) continue;
 							stop();
+							return;
 						}
 					});
-					child.stderr.on("data", () => {});
-					return child;
+					spawned.stderr.on("data", () => {});
+					return spawned;
 				},
 			},
 		});
