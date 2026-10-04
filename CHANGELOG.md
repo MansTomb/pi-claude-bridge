@@ -2,6 +2,8 @@
 
 ## UNRELEASED
 
+- **Add: isolated prompt-cache refresh** — expose `refreshSessionCache` for completed provider sessions, preserving the prompt, tools and effort on a non-persisted native fork with one-token output and immediate process termination at the first response.
+
 - **Add: durable host lifecycle** — export fork-parent registration and settled-session release without resetting the process provider; release settled fork gates.
 - **Bump: Pi 1.0** — align development and peer packages with the Durable integration.
 
