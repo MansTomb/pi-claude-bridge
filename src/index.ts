@@ -1,6 +1,8 @@
 import { calculateCost, createAssistantMessageEventStream, type AssistantMessage, type AssistantMessageEventStream, type Context, type ImageContent, type Model, type SimpleStreamOptions, type TextContent, type Tool, type UserMessage } from "@earendil-works/pi-ai";
 import { getModels } from "@earendil-works/pi-ai/compat";
 import { buildSessionContext, compact, generateBranchSummary, keyHint, type BranchSummaryResult, type CompactionEntry, type ExtensionAPI, type ExtensionContext, type ExtensionUIContext } from "@earendil-works/pi-coding-agent";
+import { refreshCache, type CacheRefreshSnapshot, type CacheRefreshResult } from "./cache-refresh.js";
+export type { CacheRefreshResult } from "./cache-refresh.js";
 import { query, type EffortLevel, type SDKMessage, type SettingSource } from "@anthropic-ai/claude-agent-sdk";
 import type { Base64ImageSource, ContentBlockParam } from "@anthropic-ai/sdk/resources";
 import { Text } from "@earendil-works/pi-tui";
@@ -355,10 +357,29 @@ export function registerForkParent(childSessionId: string, parentSessionId: stri
 	forkParents.set(childSessionId, parentSessionId);
 }
 
+const cacheRefreshSnapshots = new Map<string, CacheRefreshSnapshot>();
+const cacheRefreshes = new Set<string>();
+
+export async function refreshSessionCache(input: { sessionId: string; signal?: AbortSignal }): Promise<CacheRefreshResult> {
+	if ([...activeQueryContexts].some((context) => context.piSessionId === input.sessionId && context.activeQuery !== null)) {
+		return { kind: "unsupported", reason: "session-active" };
+	}
+	if (cacheRefreshes.has(input.sessionId)) return { kind: "unsupported", reason: "refresh-active" };
+	const snapshot = cacheRefreshSnapshots.get(input.sessionId);
+	if (!snapshot) return { kind: "unsupported", reason: "no-completed-query" };
+	const state = sessionStateFor(input.sessionId);
+	if (!state || state.needsRebuild || state.sessionId !== snapshot.sessionId) return { kind: "unsupported", reason: "session-rewritten" };
+	cacheRefreshes.add(input.sessionId);
+	try { return await refreshCache(snapshot, input.signal); }
+	finally { cacheRefreshes.delete(input.sessionId); }
+}
+
 export function releaseSession(sessionId: string): void {
+	if (cacheRefreshes.has(sessionId)) throw new Error(`Session ${sessionId} is refreshing its cache; abort or settle it before release`);
 	if ([...activeQueryContexts].some((context) => context.piSessionId === sessionId)) {
 		throw new Error(`Session ${sessionId} is still active; abort or settle it before release`);
 	}
+	cacheRefreshSnapshots.delete(sessionId);
 	sharedSessions.delete(sessionKey(sessionId));
 	forkParents.delete(sessionId);
 	historyRewrittenBySession.delete(sessionId);
@@ -1131,6 +1152,7 @@ export const __test = {
 		// No id: full reset (the pre-map semantics — tests start from a blank slate).
 		if (piSessionId === undefined) {
 			sharedSessions.clear();
+			cacheRefreshSnapshots.clear();
 			forkParents.clear();
 			forkGates.clear();
 		} else setSessionStateFor(piSessionId, null);
@@ -1986,6 +2008,7 @@ function discardRewrittenQuery(c: QueryContext): void {
  *  Two cases: tool result delivery (active query) or fresh query. */
 function streamClaudeAgentSdk(model: Model<any>, context: Context, options?: SimpleStreamOptions): AssistantMessageEventStream {
 	showStartupNoticeOnce();
+	if (options?.sessionId) cacheRefreshSnapshots.delete(options.sessionId);
 	// pi hands providers a transcript (prompt/tools folded into system messages) — fold it
 	// back out to the prompt/tools fields every cursor write, syncSharedSession call and
 	// prompt-capture lookup below assumes (issue #106).
@@ -2357,6 +2380,13 @@ function streamClaudeAgentSdk(model: Model<any>, context: Context, options?: Sim
 					});
 					if (queryCtx.turnOutput?.stopReason !== "error" && queryCtx.lastAssistantUuid) {
 						recordCompletedQuery(queryCtx.piSessionId, sessionId, cwd, lastContext, queryCtx.lastAssistantUuid);
+						if (queryCtx.piSessionId && !needsRebuild) {
+							const { mcpServers: _servers, ...refreshOptions } = queryOptions;
+							cacheRefreshSnapshots.set(queryCtx.piSessionId, {
+								options: refreshOptions, tools: structuredClone(mcpTools),
+								sessionId, checkpoint: queryCtx.lastAssistantUuid,
+							});
+						}
 					}
 				}
 			}

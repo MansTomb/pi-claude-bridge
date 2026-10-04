@@ -132,3 +132,30 @@ Requires the following in `~/.pi/agent/subagents.json`:
 **System prompt changes mid-session may not reach the model.** The bridge keeps Claude Code's default prompt recording: project context (AGENTS.md/CLAUDE.md), skills, and extension-written instructions are captured on the first request and reused on resume. This keeps the cached prefix stable, but later changes may not take effect until a rebuild or compaction. Start a new session if updated instructions must take effect immediately.
 
 **Exported Anthropic environment variables override the Claude Code child (issue #107).** An exported `ANTHROPIC_BASE_URL`, `ANTHROPIC_API_KEY`, or `ANTHROPIC_AUTH_TOKEN` redirects Claude Code to that gateway and every turn fails with its auth error. Unset them for the pi process.
+
+## Refreshing a completed provider session's prompt cache
+
+Hosts can call `refreshSessionCache({ sessionId, signal })` from `src/index.ts`
+after a provider turn completes. The session ID is the same one passed to
+`streamSimple`. The host owns the schedule and cancels and awaits any refresh
+before starting another turn, rewriting history, or releasing the session.
+
+The operation retains the completed query's model, prompt, effort and tool
+definitions. It runs a non-persisted native fork from the last verified assistant
+checkpoint. Tool handlers refuse execution, output is capped at one token, and
+the child is killed at the first provider response to prevent Claude Code's
+truncation recovery from generating another turn. Abort and the twenty-second
+timeout kill the child and await its exit.
+
+A result with `kind: "refreshed"` contains `input`, `cacheRead` and `cacheWrite`
+from the response's initial usage. It does not claim a cache hit when
+`cacheRead` is zero. `kind: "unsupported"` means the session has no completed
+query, is still active, has been rewritten, or already has a refresh in progress.
+Transport failures reject. No refresh prompt or output
+enters the parent transcript. Snapshots exist only in memory, so a restarted host
+must complete a new provider turn before it can refresh.
+
+`npm run test:unit` includes a real Claude SDK subprocess against a synthetic
+HTTP endpoint. It checks a single capped request even when the response reports
+`max_tokens`, preserved prompt and tool definitions, unchanged parent history,
+and clean foreground continuation. It needs no model credentials.
