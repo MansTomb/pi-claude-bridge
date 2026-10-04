@@ -54,15 +54,11 @@ Pi's existing `cacheRetention: "none"` one-off summarization path remains isolat
 
 The harness supplies structured Pi text blocks with Anthropic `cache_control` metadata. `BridgeTextContent` in `src/user-content.ts` extends Pi's text type with the SDK's cache and citation fields. The bridge preserves those fields, text bytes, and block order in prompt extraction, steering, conversion, and in-memory `cc-session-io` imports. OptChat also preserves unmarked text-array boundaries. Ordinary unmarked default-provider text retains its previous string fallback and empty-block filtering.
 
-The harness owns view splitting. For a sufficiently long view, it places three `{ type: "ephemeral", ttl: "5m" }` marks at the last newlines before characters 50,000, 80,000, and 100,000. It skips positions beyond the view's end. This bridge neither splits the view nor adds marks to its blocks.
+The managed harness supplies the memory view as ordinary text. Cache placement and lifetime belong to Claude Code and the existing CLIProxy configuration. OptChat no longer sets `DISABLE_PROMPT_CACHING` or injects top-level `cache_control` through `CLAUDE_CODE_EXTRA_BODY`. Endpoint and authentication environment handling stays the same as the default bridge path.
 
-`optChatQueryOptions` constructs the Claude subprocess environment with `DISABLE_PROMPT_CACHING=1` and `CLAUDE_CODE_EXTRA_BODY` containing top-level `cache_control: { type: "ephemeral", ttl: "5m" }`. It preserves other inherited environment variables and unrelated extra-body keys, replaces a conflicting top-level cache mark, and rejects non-object extra-body JSON before session setup.
+Iwanna approved this compatibility tradeoff on 4 October 2026. The original three view breakpoints plus one request-end breakpoint are deferred. The saved failed request showed the injected top-level marker plus four block markers added by CLIProxy, which Anthropic rejected. CLIProxy's limiter counted block markers but omitted the top-level marker. Removing our override avoids that conflict without changing the proxy.
 
-The initial source inspection used SDK 0.3.280 with Claude Code 2.1.280. Its `Options.env` documents subprocess environment replacement. Its `Settings.maxEffortLevel` documentation mentions `CLAUDE_CODE_EXTRA_BODY`; the bundled CLI contains the variable and diagnostics requiring a JSON object. `Options` has no typed `extraBody` or top-level `cache_control` setting. `promptCacheTtl` controls mark lifetime and does not express a request-end mark. The environment mechanism is the existing request construction route used here.
-
-The branch now builds on ludocosm `5dbaa66` and pins SDK 0.3.283. Type checking and all 85 fixed-data OptChat tests pass after that rebase. No SDK prompt or wire capture has been run on the updated version.
-
-Fixed-input tests prove that the bridge constructs this environment and retains the three supplied marks. They do not prove that Claude Code forwards the fourth mark, suppresses every automatic mark, or that CLIProxy accepts the resulting cache layout. The bundled CLI also contains a diagnostic that organization policy can disable `CLAUDE_CODE_EXTRA_BODY`. Those behaviors need an approved request capture through the existing gateway. No end-to-end cache claim follows from these unit tests.
+Structured cache metadata remains supported for other bridge callers. The harness no longer generates it. Existing fixed-data tests cover structured content, fresh-turn identity, history import, and teardown. Live responses and cache savings still require an approved test through Claude Code and CLIProxy.
 
 ## Verification commands
 
@@ -75,7 +71,7 @@ npm run test:optchat-unit
 git diff --check
 ```
 
-`test:optchat-unit` explicitly selects fixed-input conversion, in-memory import, transcript replay, option construction, query teardown, and checkpoint persistence tests. It does not call an SDK query, Pi prompt, fake endpoint, or live provider. The in-memory import fixture never saves its session records. Checkpoint tests write fixed transcripts and sidecars only under the preload's temporary Claude directory, which it removes on exit. Teardown tests use fixed lifecycle resources without invoking an SDK query.
+`test:optchat-unit` explicitly selects fixed-input conversion, in-memory import, transcript replay, turn identity, query teardown, and checkpoint persistence tests. It does not call an SDK query, Pi prompt, fake endpoint, or live provider. The in-memory import fixture never saves its session records. Checkpoint tests write fixed transcripts and sidecars only under the preload's temporary Claude directory, which it removes on exit. Teardown tests use fixed lifecycle resources without invoking an SDK query.
 
 The following existing regression commands send agent prompts and require approval of each concrete run. They test default ludocosm behavior, not the OptChat handle API:
 

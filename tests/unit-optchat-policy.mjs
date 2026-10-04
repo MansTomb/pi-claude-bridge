@@ -8,7 +8,7 @@ import { QueryContext } from "../src/query-state.js";
 import { makePromptStream } from "../src/prompt-stream.js";
 import { readPersistedSession } from "../src/transcript-checkpoints.js";
 import { convertPiMessages } from "../src/convert.js";
-import { createTurnSessionPolicy, optChatQueryOptions, turnStreamOptions } from "../src/session-policy.js";
+import { createTurnSessionPolicy, turnStreamOptions } from "../src/session-policy.js";
 import { __test, createOptChatTurn, registerForkParent, releaseSession } from "../src/index.js";
 
 const view = [
@@ -136,48 +136,6 @@ describe("OptChat transport policy", () => {
 		assert.deepEqual(createTurnSessionPolicy({ turnId: "delivery-one", sessionKey: "turn-one" }), first);
 		assert.deepEqual(createTurnSessionPolicy({ turnId: "delivery-two", sessionKey: "turn-two" }), second);
 		assert.throws(() => createTurnSessionPolicy({ turnId: " ", sessionKey: "turn-one" }), /nonempty transport turnId/);
-	});
-
-	it("constructs the request-end policy while preserving gateway wiring and unrelated body fields", () => {
-		const options = {
-			resume: "same-turn-cc",
-			tools: [],
-			env: {
-				ANTHROPIC_BASE_URL: "http://gateway.example.invalid",
-				ANTHROPIC_AUTH_TOKEN: "synthetic-token",
-				DISABLE_PROMPT_CACHING: "0",
-				CLAUDE_CODE_EXTRA_BODY: '{"metadata":{"user_id":"synthetic"},"cache_control":{"type":"ephemeral","ttl":"1h"}}',
-			},
-		};
-		const before = structuredClone(options);
-		assert.deepEqual(optChatQueryOptions(options), {
-			resume: "same-turn-cc",
-			tools: [],
-			env: {
-				ANTHROPIC_BASE_URL: "http://gateway.example.invalid",
-				ANTHROPIC_AUTH_TOKEN: "synthetic-token",
-				DISABLE_PROMPT_CACHING: "1",
-				CLAUDE_CODE_EXTRA_BODY: '{"metadata":{"user_id":"synthetic"},"cache_control":{"type":"ephemeral","ttl":"5m"}}',
-			},
-		});
-		assert.deepEqual(options, before);
-	});
-
-	it("constructs the end mark without reading or changing the process environment", () => {
-		assert.deepEqual(optChatQueryOptions({ tools: [] }), {
-			tools: [],
-			env: { DISABLE_PROMPT_CACHING: "1", CLAUDE_CODE_EXTRA_BODY: '{"cache_control":{"type":"ephemeral","ttl":"5m"}}' },
-		});
-	});
-
-	it("rejects malformed extra-body input before request construction", () => {
-		for (const raw of ["null", "[]", "42", '"text"']) {
-			assert.throws(() => optChatQueryOptions({ env: { CLAUDE_CODE_EXTRA_BODY: raw } }), /JSON object/);
-		}
-		assert.throws(() => optChatQueryOptions({ env: { CLAUDE_CODE_EXTRA_BODY: "{" } }), SyntaxError);
-		assert.deepEqual(optChatQueryOptions({ env: { CLAUDE_CODE_EXTRA_BODY: "{}" } }).env, {
-			DISABLE_PROMPT_CACHING: "1", CLAUDE_CODE_EXTRA_BODY: '{"cache_control":{"type":"ephemeral","ttl":"5m"}}',
-		});
 	});
 });
 

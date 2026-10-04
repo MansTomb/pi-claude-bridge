@@ -31,7 +31,7 @@ import { buildActionSummary, type ToolCallState } from "./askclaude-ui.js";
 import { askClaudeCallTags, askClaudeToolDescription, buildAskClaudeParams, resolveAskClaudeDefaults, resolveAskClaudeMode, type AskClaudeMode } from "./askclaude-schema.js";
 import { nonSystemMessages, toBridgeContext } from "./transcript.js";
 import { userTextBlock } from "./user-content.js";
-import { createTurnSessionPolicy, optChatQueryOptions, turnStreamOptions, type TurnSessionPolicy } from "./session-policy.js";
+import { createTurnSessionPolicy, turnStreamOptions, type TurnSessionPolicy } from "./session-policy.js";
 
 // --- Debug logging ---
 // CLAUDE_BRIDGE_DEBUG=1 enables debug logging to ~/.pi/agent/claude-bridge.log
@@ -2033,7 +2033,6 @@ function discardRewrittenQuery(c: QueryContext): void {
 function streamClaudeAgentSdk(model: Model<any>, context: Context, options?: SimpleStreamOptions, turn?: { policy: TurnSessionPolicy; queryContext: QueryContext }): AssistantMessageEventStream {
 	const baseContext = turn?.queryContext ?? ctx();
 	const childEnv = { ...process.env, ...CC_CHILD_ENV };
-	const transportOptions = turn ? optChatQueryOptions({ env: childEnv }) : { env: childEnv };
 	if (turn) options = turnStreamOptions(options, turn.policy);
 	showStartupNoticeOnce();
 	if (options?.sessionId) cacheRefreshSnapshots.delete(options.sessionId);
@@ -2279,7 +2278,7 @@ function streamClaudeAgentSdk(model: Model<any>, context: Context, options?: Sim
 	// Manual /compact in CC still works (we never invoke it).
 	const queryOptions: NonNullable<Parameters<typeof query>[0]["options"]> = {
 		cwd,
-		...transportOptions,
+		env: childEnv,
 		tools: [],
 		permissionMode: "bypassPermissions",
 		includePartialMessages: true,
