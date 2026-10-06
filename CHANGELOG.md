@@ -2,6 +2,7 @@
 
 ## UNRELEASED
 
+- **Add: host history rewrites** — export `markHistoryRewritten(sessionId)` for a host that compacts or resets a pi session outside pi's own events, such as a pi-durable Harness. It has the effect of `session_compact` on that session alone: the next sync rebuilds from the rewritten history and a query parked at a tool boundary is discarded. Without it the shorter history reads as an unrelated caller and every later turn runs as an ephemeral query holding only the newest user lines.
 - **Add: isolated prompt-cache refresh** — expose `refreshSessionCache` for completed provider sessions, preserving the prompt, tools and effort on a non-persisted native fork with one-token output and immediate process termination at the first response.
 
 - **Add: durable host lifecycle** — export fork-parent registration and settled-session release without resetting the process provider; release settled fork gates.
