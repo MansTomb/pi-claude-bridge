@@ -257,3 +257,22 @@ describe("per-session mirrors", () => {
 			"an attributed session never touches the unattributed bucket");
 	});
 });
+
+describe("markHistoryRewritten", () => {
+	it("lets a host that rewrote one session's history outside pi's events rebuild it and discard its parked query", async () => {
+		const { markHistoryRewritten } = await import("../src/index.js");
+		setSharedSession("pi-host", { sessionId: "cc-host", cursor: 9, cwd: "/tmp", needsRebuild: false, piSessionId: "pi-host" });
+		setSharedSession("pi-other", { sessionId: "cc-other", cursor: 3, cwd: "/tmp", needsRebuild: false, piSessionId: "pi-other" });
+		const host = parkedQuery("call_1", "pi-host");
+		const other = parkedQuery("call_other", "pi-other");
+
+		markHistoryRewritten("pi-host");
+
+		assert.equal(getSharedSession("pi-host").needsRebuild, true,
+			"the compacted history is shorter than the mirror; reading it as another caller would drop the history");
+		assert.equal(host.c.historyStale, true,
+			"the parked query answers over the history the host replaced");
+		assert.equal(getSharedSession("pi-other").needsRebuild, false, "another session keeps its mirror");
+		assert.equal(other.c.historyStale, false, "another session keeps its parked query");
+	});
+});

@@ -385,6 +385,10 @@ export function releaseSession(sessionId: string): void {
 	historyRewrittenBySession.delete(sessionId);
 }
 
+export function markHistoryRewritten(sessionId: string): void {
+	sponsorMarkRebuildForSession(sessionId, "host-rewrite");
+}
+
 function awaitForkGate(base: string, started: Promise<void>): Promise<void> {
 	const existing = forkGates.get(base);
 	if (existing) {
