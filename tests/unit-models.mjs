@@ -99,7 +99,7 @@ describe("resolveModel", () => {
 
 describe("Claude Code runtime policy", () => {
 	it("measured-1M ids send [1m] on every plan", () => {
-		for (const id of ["claude-opus-5", "claude-opus-4-8", "claude-opus-4-7", "claude-fable-5", "claude-fable-5-1", "claude-sonnet-5"]) {
+		for (const id of ["claude-opus-5", "claude-opus-4-8", "claude-opus-4-7", "claude-fable-5", "claude-fable-5-1", "claude-fable-5-2", "claude-sonnet-5"]) {
 			assert.deepEqual(resolveClaudeCodeRuntimeModel(oneM(id), PRO), { cliModelId: `${id}[1m]`, contextWindow: 1000000 });
 		}
 	});
@@ -192,4 +192,27 @@ describe("applyLongContext", () => {
 
 it("claude-opus-5-5 requests 1M on Pro", () => {
 	assert.deepEqual(resolveClaudeCodeRuntimeModel({ id: "claude-opus-5-5" }, PRO), { cliModelId: "claude-opus-5-5[1m]", contextWindow: 1000000 });
+});
+
+describe("Claude Fable 5.2 on a catalog that predates it", () => {
+	const catalog = getModels("anthropic").filter((m) => m.id !== "claude-fable-5-2");
+	const registered = applyLongContext(buildModels(catalog), PRO);
+
+	it("appears in the picker at 1M and wins the fable shortcut", () => {
+		const fable = find(registered, "claude-fable-5-2");
+		assert.equal(fable.name, "Claude Fable 5.2 1M");
+		assert.equal(fable.contextWindow, 1000000);
+		assert.equal(fable.maxTokens, 128000);
+		assert.equal(resolveModel(registered, "fable")?.id, "claude-fable-5-2");
+		assert.deepEqual(resolveClaudeCodeRuntimeModel(fable, PRO), { cliModelId: "claude-fable-5-2[1m]", contextWindow: 1000000 });
+	});
+
+	it("defers to pi-ai's own entry once the catalog lists it", () => {
+		const listed = buildModels([...catalog, mockPiAiModel("claude-fable-5-2", { name: "From pi-ai" })]);
+		assert.deepEqual(listed.filter((m) => m.id === "claude-fable-5-2").map((m) => m.name), ["From pi-ai"]);
+	});
+
+	it("adds nothing when its predecessor is missing", () => {
+		assert.deepEqual(buildModels([oneM("claude-opus-5-5")]).map((m) => m.id), ["claude-opus-5-5"]);
+	});
 });

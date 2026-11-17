@@ -2,6 +2,7 @@
 
 ## UNRELEASED
 
+- **Add: Claude Fable 5.2 with 1M context** — bump the Agent SDK to 0.3.325 (Claude Code 2.1.325; Fable 5.2 needs 2.1.321+) and request `claude-fable-5-2[1m]`, measured to serve 1M at 128K max output. Pi-ai catalogs older than 1.5.1 lack Fable 5.2, so the picker derives it from Fable 5.1's entry until pi-ai lists it. Contract tests follow upstream: Haiku 5.5, a prompt past 1M tokens, only user records counted for parallel tool results (CC now logs `api-request-blob` records in the session file), and the new preset anchor.
 - **Add: isolated prompt-cache refresh** — expose `refreshSessionCache` for completed provider sessions, preserving the prompt, tools and effort on a non-persisted native fork with one-token output and immediate process termination at the first response.
 
 - **Add: opt-in OptChat turn sessions** — expose explicit transport turn handles, retain the existing SDK tool loop, preserve structured user blocks, and retain native Claude Code caching. Settle final OptChat streams after teardown and skip checkpoint sidecar reads and writes through rebuild and recovery. Keep native caching as the default; an explicit `cachePolicy: "optchat"` reserves three caller view marks plus a five-minute automatic end marker when the gateway preserves caller-owned layouts.

@@ -29,8 +29,21 @@ function versionRank(id: string): { family: string; tuple: [number, number] } {
 	return { family, tuple: [Number(major) || 0, Number(minor) || 0] };
 }
 
+const CATALOG_SUCCESSORS = [
+	{ id: "claude-fable-5-2", name: "Claude Fable 5.2", predecessor: "claude-fable-5-1" },
+];
+
+export function withCatalogSuccessors<T extends { id: string; [key: string]: any }>(piAiModels: T[]): T[] {
+	const known = new Set(piAiModels.map((m) => m.id));
+	const successors = CATALOG_SUCCESSORS.flatMap(({ id, name, predecessor }) => {
+		const base = piAiModels.find((m) => m.id === predecessor);
+		return base && !known.has(id) ? [{ ...base, id, name }] : [];
+	});
+	return [...piAiModels, ...successors];
+}
+
 export function buildModels<T extends { id: string; [key: string]: any }>(piAiModels: T[]) {
-	return piAiModels
+	return withCatalogSuccessors(piAiModels)
 		.filter((m) => typeof m.id === "string" && !isDatedAlias(m.id))
 		.sort((a, b) => {
 			const fa = FAMILY_ORDER.indexOf(versionRank(a.id).family);
@@ -81,6 +94,7 @@ export type ClaudeCodeRuntimeModel = {
 const MEASURED_ONE_M = new Set([
 	"claude-fable-5",
 	"claude-fable-5-1",
+	"claude-fable-5-2",
 	"claude-opus-5-5",
 	"claude-opus-5",
 	"claude-opus-4-8",
