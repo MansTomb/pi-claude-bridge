@@ -54,9 +54,20 @@ const RECORD_STREAM_PATH = process.env.CLAUDE_BRIDGE_RECORD_STREAM;
 //   out of a pi session, which serves its own tools.
 // - DISABLE_AUTO_COMPACT=1: pi owns compaction; CC compacting its own copy would
 //   diverge from pi's history, which is the source of truth for every rebuild.
+// - CLAUDE_CODE_ELEGANT_MEADOW=0: stop CC (2.1.308+) logging every API request
+//   into its session file (`api-request`, `api-request-shape`, `api-request-blob`
+//   records). CC never reads them back to build a request; they only make the
+//   file about a third larger.
+// - CLAUDE_CODE_RESUME_INTERRUPTED_TURN_MAX_AGE_MS=1: a resumed session that ends at
+//   a tool result (after a terminating tool, or a discarded parked query) reads to CC
+//   as an interrupted turn, and behind a server flag CC inserts a "Continue from where
+//   you left off." user message ahead of pi's prompt. pi supplies every prompt, so
+//   every turn counts as too old to resume.
 const CC_CHILD_ENV = {
 	ENABLE_CLAUDEAI_MCP_SERVERS: "0",
 	DISABLE_AUTO_COMPACT: "1",
+	CLAUDE_CODE_ELEGANT_MEADOW: "0",
+	CLAUDE_CODE_RESUME_INTERRUPTED_TURN_MAX_AGE_MS: "1",
 } as const;
 
 // Pi owns context files on the provider path, so Claude Code must not load its

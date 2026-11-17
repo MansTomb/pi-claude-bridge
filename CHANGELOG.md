@@ -2,6 +2,7 @@
 
 ## UNRELEASED
 
+- **Fix: no stray "Continue from where you left off." prompt and no per-request log in session files** — port upstream #145 (`CLAUDE_CODE_RESUME_INTERRUPTED_TURN_MAX_AGE_MS=1`) and upstream's `CLAUDE_CODE_ELEGANT_MEADOW=0`, both needed on Claude Code 2.1.308+.
 - **Add: Claude Fable 5.2 with 1M context** — bump the Agent SDK to 0.3.325 (Claude Code 2.1.325; Fable 5.2 needs 2.1.321+) and request `claude-fable-5-2[1m]`, measured to serve 1M at 128K max output. Pi-ai catalogs older than 1.5.1 lack Fable 5.2, so the picker derives it from Fable 5.1's entry until pi-ai lists it. Contract tests follow upstream: Haiku 5.5, a prompt past 1M tokens, only user records counted for parallel tool results (CC now logs `api-request-blob` records in the session file), and the new preset anchor.
 - **Add: isolated prompt-cache refresh** — expose `refreshSessionCache` for completed provider sessions, preserving the prompt, tools and effort on a non-persisted native fork with one-token output and immediate process termination at the first response.
 
