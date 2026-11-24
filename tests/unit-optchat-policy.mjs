@@ -161,6 +161,8 @@ describe("OptChat caller-owned cache options", () => {
 	it("uses a child environment and rejects malformed extra-body objects", () => {
 		const result = turnQueryOptions({}, policy);
 		assert.deepEqual(result.env, { DISABLE_PROMPT_CACHING: "1", CLAUDE_CODE_EXTRA_BODY: '{"cache_control":{"type":"ephemeral","ttl":"5m"}}' });
+		const hourly = createTurnSessionPolicy({ turnId: "delivery", sessionKey: "session", cachePolicy: "optchat", cacheTtl: "1h" });
+		assert.deepEqual(turnQueryOptions({}, hourly).env, { DISABLE_PROMPT_CACHING: "1", CLAUDE_CODE_EXTRA_BODY: '{"cache_control":{"type":"ephemeral","ttl":"1h"}}' });
 		for (const raw of ["null", "[]", "1", '"text"', "{"])
 			assert.throws(() => turnQueryOptions({ env: { CLAUDE_CODE_EXTRA_BODY: raw } }, policy));
 	});

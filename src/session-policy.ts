@@ -5,6 +5,7 @@ import { z } from "zod";
 const TurnOptions = z.object({
 	turnId: z.string().regex(/\S/, "A Claude bridge turn needs a nonempty transport turnId"),
 	cachePolicy: z.enum(["native", "optchat"]).optional(),
+	cacheTtl: z.enum(["5m", "1h"]).optional(),
 });
 export type OptChatTurnOptions = z.infer<typeof TurnOptions>;
 const SessionPolicy = TurnOptions.extend({ kind: z.literal("fresh-turn"), sessionKey: z.string() });
@@ -19,12 +20,13 @@ export function turnQueryOptions(options: Options, policy?: TurnSessionPolicy): 
 	const env = options.env ?? {};
 	const raw = env.CLAUDE_CODE_EXTRA_BODY;
 	const extraBody = z.record(z.string(), z.unknown()).parse(raw ? JSON.parse(raw) : {});
+	const ttl = policy.cacheTtl ?? "5m";
 	return {
 		...options,
 		env: {
 			...env,
 			DISABLE_PROMPT_CACHING: "1",
-			CLAUDE_CODE_EXTRA_BODY: JSON.stringify({ ...extraBody, cache_control: { type: "ephemeral", ttl: "5m" } }),
+			CLAUDE_CODE_EXTRA_BODY: JSON.stringify({ ...extraBody, cache_control: { type: "ephemeral", ttl } }),
 		},
 	};
 }
